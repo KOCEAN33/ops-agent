@@ -73,21 +73,35 @@ test("a partial Discord configuration fails at start", () => {
   expect(() => loadConfig({ ...base, MODEL: "claude-sonnet-5-5", ...partial })).toThrow(/DISCORD_OWNER_ID/);
 });
 
-const githubVars = { GITHUB_APP_ID: "12345", GITHUB_APP_KEY: "pem", GITOPS_REPO: "example-owner/example-repo" };
+const repos = { GITOPS_REPOS: "example-owner/example-platform, example-owner/example-apps" };
+const githubVars = { GITHUB_APP_ID: "12345", GITHUB_APP_KEY: "pem", ...repos };
 
-test("issues are off without the GitHub variables and on with all three", () => {
-  expect(loadConfig({ ...base, MODEL: "claude-sonnet-5-5" }).github).toBeNull();
-  expect(loadConfig({ ...base, MODEL: "claude-sonnet-5-5", ...githubVars }).github).toEqual({
-    appId: "12345",
-    key: "pem",
-    repo: "example-owner/example-repo",
-  });
+test("GITOPS_REPOS lists owner/name repositories in order, the first being the default", () => {
+  const c = loadConfig({ ...base, MODEL: "claude-sonnet-5-5", ...githubVars, GITOPS_DIR: "/repos/gitops" });
+  expect(c.gitopsRepos).toEqual(["example-owner/example-platform", "example-owner/example-apps"]);
+  expect(c.gitopsDir).toBe("/repos/gitops");
 });
 
-test("a partial GitHub configuration or a malformed repository fails at start", () => {
+test("a malformed or twice-named repository fails at start", () => {
+  for (const GITOPS_REPOS of ["example-owner/a,example-apps", "example-owner/apps,other-owner/apps", "example-owner/.."]) {
+    expect(() => loadConfig({ ...base, MODEL: "claude-sonnet-5-5", ...githubVars, GITOPS_REPOS })).toThrow(/GITOPS_REPOS/);
+  }
+});
+
+test("GitOps reads need GITOPS_REPOS", () => {
+  expect(() => loadConfig({ ...base, MODEL: "claude-sonnet-5-5", GITOPS_DIR: "/repos/gitops" })).toThrow(/GITOPS_REPOS/);
+});
+
+test("issues are off without the GitHub variables and on with both and GITOPS_REPOS", () => {
+  expect(loadConfig({ ...base, MODEL: "claude-sonnet-5-5", ...repos }).github).toBeNull();
+  expect(loadConfig({ ...base, MODEL: "claude-sonnet-5-5", ...githubVars }).github).toEqual({ appId: "12345", key: "pem" });
+});
+
+test("a partial GitHub configuration fails at start", () => {
   const { GITHUB_APP_KEY: _, ...partial } = githubVars;
   expect(() => loadConfig({ ...base, MODEL: "claude-sonnet-5-5", ...partial })).toThrow(/GITHUB_APP_KEY/);
-  expect(() => loadConfig({ ...base, MODEL: "claude-sonnet-5-5", ...githubVars, GITOPS_REPO: "example-repo" })).toThrow(/GITOPS_REPO/);
+  const { GITOPS_REPOS: __, ...noRepos } = githubVars;
+  expect(() => loadConfig({ ...base, MODEL: "claude-sonnet-5-5", ...noRepos })).toThrow(/GITOPS_REPOS/);
 });
 
 test("LINK_ALLOWLIST lists hosts, case and spaces ignored", () => {

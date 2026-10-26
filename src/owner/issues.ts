@@ -1,8 +1,9 @@
 import type { ModelMessage } from "ai";
 import { createPrivateKey, sign, type KeyObject } from "node:crypto";
+import { z } from "zod";
 import { clean } from "./links";
 import type { IssueWrite, Store } from "../store";
-import { unwrap } from "../tools/contract";
+import { readTool, unwrap, type ReadTool } from "../tools/contract";
 
 // What one turn hands off to the owner's issue. The store keeps it raw, and the
 // queue cleans it when it writes, as the outbox does for posts.
@@ -10,25 +11,56 @@ export interface Handoff {
   input: string;
   answer: string;
   queries: { tool: string; input: unknown; start?: string; end?: string; time?: string }[];
+  // The repository name, without its owner, the model last recorded in the
+  // turn. The queue checks it against the configured list.
+  repo?: string;
+}
+
+const ISSUE_REPOSITORY = "issue_repository";
+
+// Only records the name. Code writes the issue, so injected text that steers
+// this call can at most move the issue to another listed repository.
+export function issueRepositoryTool(names: [string, ...string[]]): Record<string, ReadTool> {
+  return {
+    [ISSUE_REPOSITORY]: readTool({
+      description: `Record the GitOps repository that holds the root cause, so this alert group's issue opens there. The repositories: ${names.join(", ")}. Without a call, the issue opens on ${names[0]}.`,
+      input: z.object({ repo: z.enum(names) }),
+      run: async ({ repo }) => ({ recorded: repo }),
+    }),
+  };
 }
 
 // The query tools return the range they resolved, such as 30m before now, so
 // the issue states it in absolute time.
 export function handoff(input: string, messages: ModelMessage[], answer: string): Handoff {
-  const results = new Map<string, Record<string, string>>();
+  const results = new Map<string, string>();
   for (const m of messages) {
     if (m.role !== "tool") continue;
-    for (const p of m.content) if (p.type === "tool-result" && p.output.type === "text") results.set(p.toolCallId, rangeOf(p.output.value));
+    for (const p of m.content) if (p.type === "tool-result" && p.output.type === "text") results.set(p.toolCallId, p.output.value);
   }
+  let repo: string | undefined;
+  // Names recorded in this turn, keyed by the call's input. The tool contract
+  // answers a repeated identical call with an error instead of running it, and
+  // that call still names its repository last.
+  const recordedFor = new Map<string, string>();
   const queries = messages.flatMap((m) =>
     m.role === "assistant" && Array.isArray(m.content)
       ? m.content.flatMap((p) => {
           if (p.type !== "tool-call") return [];
-          return [{ tool: p.toolName, input: p.input, ...results.get(p.toolCallId) }];
+          const result = results.get(p.toolCallId);
+          if (p.toolName === ISSUE_REPOSITORY) {
+            // A call the schema refused returns an error, not a recorded name.
+            const recorded = result === undefined ? undefined : (unwrap(result) as { recorded?: unknown } | undefined)?.recorded;
+            const key = JSON.stringify(p.input);
+            if (typeof recorded === "string") recordedFor.set(key, recorded);
+            repo = recordedFor.get(key) ?? repo;
+            return [];
+          }
+          return [{ tool: p.toolName, input: p.input, ...(result === undefined ? {} : rangeOf(result)) }];
         })
       : [],
   );
-  return { input, answer, queries };
+  return { input, answer, queries, ...(repo === undefined ? {} : { repo }) };
 }
 
 // A result over the size limit is cut and no longer parses, but the query tools
@@ -104,12 +136,13 @@ export function issueBody(h: Handoff, hosts: ReadonlySet<string>, marker: string
   return parts.join("\n\n");
 }
 
+// Each call takes the repository as owner/name.
 export interface IssueApi {
   // Returns the issue's number.
-  open(title: string, body: string): Promise<number>;
-  comment(issue: number, body: string): Promise<void>;
+  open(repo: string, title: string, body: string): Promise<number>;
+  comment(repo: string, issue: number, body: string): Promise<void>;
   // The number of a recent issue whose body holds the marker.
-  find(marker: string): Promise<number | null>;
+  find(repo: string, marker: string): Promise<number | null>;
 }
 
 // GitHub refused the write for good, so sending it again changes nothing.
@@ -122,6 +155,8 @@ export interface IssueQueueDeps {
   store: Store;
   api: IssueApi;
   linkHosts: ReadonlySet<string>;
+  // owner/name of each GitOps repository, the first being the default.
+  repos: readonly string[];
 }
 
 // Writes the store's hand-offs in order: a session's first opens its issue and
@@ -155,21 +190,30 @@ export class IssueQueue {
     }
   }
 
+  // The session's first write fixes its repository: the one the hand-off
+  // names if it is listed, else the default. Later names are ignored, so the
+  // issue stays where it opened.
+  private repo(w: IssueWrite): string {
+    const named = this.d.repos.find((r) => r.split("/")[1] === w.handoff.repo);
+    return this.d.store.fixIssueRepo(w.sessionId, named ?? this.d.repos[0]!);
+  }
+
   private async deliver(w: IssueWrite) {
     const issue = this.d.store.issue(w.sessionId);
+    const repo = this.repo(w);
     const body = issueBody(w.handoff, this.d.linkHosts, issue.marker);
-    if (issue.number !== null) return this.d.api.comment(issue.number, body);
+    if (issue.number !== null) return this.d.api.comment(repo, issue.number, body);
     // An earlier open may have run and lost its response. Its issue carries
     // the session's marker.
     if (w.tried) {
-      const found = await this.d.api.find(issue.marker);
+      const found = await this.d.api.find(repo, issue.marker);
       if (found !== null) return this.d.store.setIssue(w.sessionId, found);
     }
     this.d.store.issueWriteTried(w.id);
     const { alertname, namespace } = this.d.store.groupKey(w.sessionId);
     // GitHub renders no link or image in a title.
     const title = stripBare(clean(`${alertname} / ${namespace ?? "cluster"}`, this.d.linkHosts), this.d.linkHosts).replace(/\s+/g, " ").slice(0, MAX_TITLE);
-    this.d.store.setIssue(w.sessionId, await this.d.api.open(title, body));
+    this.d.store.setIssue(w.sessionId, await this.d.api.open(repo, title, body));
   }
 }
 
@@ -179,8 +223,6 @@ export interface GitHubDeps {
   // The App's private key, PEM. GitHub issues PKCS#1, which WebCrypto cannot
   // import.
   key: string;
-  // owner/name of the GitOps repository.
-  repo: string;
   now: () => Date;
 }
 
@@ -190,13 +232,13 @@ const TOKEN_MARGIN_MS = 5 * 60_000;
 // A lost response is retried within a minute, so the issue is among the newest.
 const FIND_RECENT = 30;
 
-// Talks to GitHub as the App. The installation token is scoped down to issues
-// write on the one repository, whatever else the App holds.
+// Talks to GitHub as the App. Each installation token is scoped down to issues
+// write on the one repository it writes to, whatever else the App holds.
 export function githubApi(d: GitHubDeps): IssueApi {
   const key: KeyObject = createPrivateKey(d.key);
-  const name = d.repo.split("/")[1]!;
-  let installation: number | null = null;
-  let token: { value: string; expiresAt: number } | null = null;
+  // Keyed by owner/name.
+  const installations = new Map<string, number>();
+  const tokens = new Map<string, { value: string; expiresAt: number }>();
 
   const b64 = (o: object) => Buffer.from(JSON.stringify(o)).toString("base64url");
   // GitHub allows at most 10 minutes, and backdating covers clock drift.
@@ -227,22 +269,27 @@ export function githubApi(d: GitHubDeps): IssueApi {
     return res.json();
   };
 
-  const installationToken = async () => {
-    if (token && token.expiresAt - TOKEN_MARGIN_MS > d.now().getTime()) return token.value;
-    installation ??= ((await appCall("GET", `/repos/${d.repo}/installation`)) as { id: number }).id;
+  const installationToken = async (repo: string) => {
+    const cached = tokens.get(repo);
+    if (cached && cached.expiresAt - TOKEN_MARGIN_MS > d.now().getTime()) return cached.value;
+    let installation = installations.get(repo);
+    if (installation === undefined) {
+      installation = ((await appCall("GET", `/repos/${repo}/installation`)) as { id: number }).id;
+      installations.set(repo, installation);
+    }
     const t = (await appCall("POST", `/app/installations/${installation}/access_tokens`, {
-      repositories: [name],
+      repositories: [repo.split("/")[1]!],
       permissions: { issues: "write" },
     })) as { token: string; expires_at: string };
-    token = { value: t.token, expiresAt: Date.parse(t.expires_at) };
-    return token.value;
+    tokens.set(repo, { value: t.token, expiresAt: Date.parse(t.expires_at) });
+    return t.token;
   };
 
-  const call = async (method: string, path: string, body: unknown, onIssue: boolean) => {
-    const res = await request(method, path, await installationToken(), body);
+  const call = async (repo: string, method: string, path: string, body: unknown, onIssue: boolean) => {
+    const res = await request(method, `/repos/${repo}${path}`, await installationToken(repo), body);
     if (res.ok) return res.json();
-    const text = `GitHub ${method} ${path} answered ${res.status}: ${(await res.text()).slice(0, 500)}`;
-    if (res.status === 401) token = null;
+    const text = `GitHub ${method} /repos/${repo}${path} answered ${res.status}: ${(await res.text()).slice(0, 500)}`;
+    if (res.status === 401) tokens.delete(repo);
     // GitHub answers a rate limit with 403 as well as 429.
     const limited = res.status === 429 || (res.status === 403 && (res.headers.get("x-ratelimit-remaining") === "0" || res.headers.has("retry-after")));
     if (res.status === 401 || limited || res.status >= 500) throw new Error(text);
@@ -251,13 +298,13 @@ export function githubApi(d: GitHubDeps): IssueApi {
   };
 
   return {
-    open: async (title, body) => ((await call("POST", `/repos/${d.repo}/issues`, { title, body }, false)) as { number: number }).number,
-    comment: async (issue, body) => {
-      await call("POST", `/repos/${d.repo}/issues/${issue}/comments`, { body }, true);
+    open: async (repo, title, body) => ((await call(repo, "POST", "/issues", { title, body }, false)) as { number: number }).number,
+    comment: async (repo, issue, body) => {
+      await call(repo, "POST", `/issues/${issue}/comments`, { body }, true);
     },
-    find: async (marker) => {
-      const path = `/repos/${d.repo}/issues?state=all&sort=created&direction=desc&per_page=${FIND_RECENT}`;
-      const issues = (await call("GET", path, undefined, false)) as { number: number; body: string | null }[];
+    find: async (repo, marker) => {
+      const path = `/issues?state=all&sort=created&direction=desc&per_page=${FIND_RECENT}`;
+      const issues = (await call(repo, "GET", path, undefined, false)) as { number: number; body: string | null }[];
       return issues.find((i) => i.body?.includes(markerLine(marker)))?.number ?? null;
     },
   };

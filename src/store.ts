@@ -90,11 +90,13 @@ export class Store {
       key TEXT PRIMARY KEY
     )`);
     // The marker goes into the session's issue, so a retry after a lost
-    // response finds the issue instead of opening another.
+    // response finds the issue instead of opening another. repo, owner/name,
+    // is fixed by the session's first write and kept for the session's life.
     this.db.run(`CREATE TABLE IF NOT EXISTS issues (
       session_id INTEGER PRIMARY KEY REFERENCES sessions(id),
       marker TEXT NOT NULL,
-      number INTEGER
+      number INTEGER,
+      repo TEXT
     )`);
     this.db.run(`CREATE TABLE IF NOT EXISTS issue_writes (
       id INTEGER PRIMARY KEY,
@@ -256,16 +258,26 @@ export class Store {
     this.db.query("UPDATE issue_writes SET state = ? WHERE id = ?").run(state, writeId);
   }
 
-  // Exists for every session with a queued write.
-  issue(sessionId: number): { marker: string; number: number | null } {
-    return this.db.query<{ marker: string; number: number | null }, [number]>("SELECT marker, number FROM issues WHERE session_id = ?").get(sessionId)!;
+  // Exists for every session with a queued write. repo is null until the
+  // session's first write.
+  issue(sessionId: number): { marker: string; number: number | null; repo: string | null } {
+    return this.db
+      .query<{ marker: string; number: number | null; repo: string | null }, [number]>("SELECT marker, number, repo FROM issues WHERE session_id = ?")
+      .get(sessionId)!;
+  }
+
+  // Sets the session's issue repository once and returns the one that holds.
+  fixIssueRepo(sessionId: number, repo: string): string {
+    this.db.query("UPDATE issues SET repo = ? WHERE session_id = ? AND repo IS NULL").run(repo, sessionId);
+    return this.issue(sessionId).repo!;
   }
 
   setIssue(sessionId: number, number: number) {
     this.db.query("UPDATE issues SET number = ? WHERE session_id = ?").run(number, sessionId);
   }
 
-  // The issue is gone, so the next write opens a new one.
+  // The issue is gone, so the next write opens a new one on the same
+  // repository.
   forgetIssue(sessionId: number) {
     this.db.query("UPDATE issues SET number = NULL WHERE session_id = ?").run(sessionId);
   }

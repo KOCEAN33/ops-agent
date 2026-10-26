@@ -5,7 +5,7 @@ import { parseWebhook } from "./alert";
 import { connect, onMessage, Outbox } from "./owner/discord";
 import { loadConfig, type Config } from "./config";
 import { gitopsTools } from "./tools/gitops";
-import { githubApi, IssueQueue } from "./owner/issues";
+import { githubApi, IssueQueue, issueRepositoryTool } from "./owner/issues";
 import { kubeTools } from "./tools/kube";
 import { lokiTools, promTools } from "./tools/query";
 import { TurnQueue } from "./queue";
@@ -74,6 +74,10 @@ const SERVICE_ACCOUNT = "/var/run/secrets/kubernetes.io/serviceaccount";
 
 async function readTools(c: Config, now: () => Date): Promise<Record<string, ReadTool>> {
   const k = c.kube;
+  // Config fails the start when reads or issues are on without a repository.
+  // The record tool is on whenever repositories are listed, so a hand-off
+  // queued while issues are off keeps the model's choice.
+  const names = c.gitopsRepos.map((r) => r.split("/")[1]!) as [string, ...string[]];
   return {
     ...(k &&
       kubeTools({
@@ -83,7 +87,8 @@ async function readTools(c: Config, now: () => Date): Promise<Record<string, Rea
       })),
     ...(c.prometheusUrl && promTools({ url: c.prometheusUrl, now })),
     ...(c.lokiUrl && lokiTools({ url: c.lokiUrl, now })),
-    ...(c.gitopsDir && gitopsTools(c.gitopsDir)),
+    ...(c.gitopsDir && gitopsTools(c.gitopsDir, names)),
+    ...(names.length > 0 && issueRepositoryTool(names)),
   };
 }
 
@@ -138,7 +143,7 @@ if (import.meta.main) {
   if (g) {
     // A key that does not parse stops the start here.
     const api = githubApi({ apiUrl: "https://api.github.com", ...g, now });
-    const issues = new IssueQueue({ store, api, linkHosts: config.linkHosts });
+    const issues = new IssueQueue({ store, api, linkHosts: config.linkHosts, repos: config.gitopsRepos });
     setInterval(() => void issues.flush(), ISSUE_POLL_MS);
   } else {
     console.log(JSON.stringify({ msg: "issues off: hand-offs wait in the store" }));

@@ -15,7 +15,7 @@ const example = {
   lokiUrl: "http://loki.example.svc:3100",
   linkAllowlist: ["grafana.example.com"],
   discord: { channelId: "100", ownerId: "200" },
-  github: { appId: "12345", installationId: "678", gitopsRepo: "example-owner/example-gitops", instructionsRepo: "example-owner/example-instructions" },
+  github: { appId: "12345", installationId: "678", gitopsRepos: ["example-owner/example.platform", "example-owner/example-apps"], instructionsRepo: "example-owner/example-instructions" },
   alertmanager: {
     namespaceSelector: { matchLabels: { "kubernetes.io/metadata.name": "example-monitoring" } },
     podSelector: { matchLabels: { "app.kubernetes.io/name": "alertmanager" } },
@@ -118,15 +118,33 @@ test.skipIf(!helm)("each repository gets a git-sync sidecar whose root the agent
   const pod = one(render(example).docs, "Deployment").spec.template.spec;
   const agent = pod.containers[0];
   const env = Object.fromEntries(agent.env.map((e: any) => [e.name, e.value]));
-  expect(env.GITOPS_DIR).toBe("/repos/gitops/current");
+  expect(env.GITOPS_DIR).toBe("/repos/gitops");
+  expect(env.GITOPS_REPOS).toBe("example-owner/example.platform,example-owner/example-apps");
   expect(env.INSTRUCTIONS_DIR).toBe("/repos/instructions/current");
-  for (const name of ["gitops", "instructions"]) {
-    const sidecar = pod.containers.find((c: any) => c.name === `git-sync-${name}`);
+  // A repository name need not be a DNS label, so volumes go by index.
+  for (const [volume, repo, mountPath] of [
+    ["gitops-0", "example-owner/example.platform", "/repos/gitops/example.platform"],
+    ["gitops-1", "example-owner/example-apps", "/repos/gitops/example-apps"],
+    ["instructions", "example-owner/example-instructions", "/repos/instructions"],
+  ]) {
+    const sidecar = pod.containers.find((c: any) => c.name === `git-sync-${volume}`);
+    expect(sidecar.args).toContain(`--repo=https://github.com/${repo}`);
     expect(sidecar.args).toContain("--link=current");
     expect(sidecar.args).toContain("--root=/git");
-    expect(sidecar.volumeMounts).toContainEqual({ name, mountPath: "/git" });
-    expect(agent.volumeMounts).toContainEqual({ name, mountPath: `/repos/${name}`, readOnly: true });
+    expect(sidecar.volumeMounts).toContainEqual({ name: volume, mountPath: "/git" });
+    expect(agent.volumeMounts).toContainEqual({ name: volume, mountPath, readOnly: true });
+    expect(pod.volumes).toContainEqual({ name: volume, emptyDir: {} });
   }
+  expect(pod.containers.filter((c: any) => c.name.startsWith("git-sync-"))).toHaveLength(3);
+});
+
+test.skipIf(!helm)("issues turn on with the App ID and the repository list", () => {
+  const env = (values: unknown) =>
+    one(render(values).docs, "Deployment").spec.template.spec.containers[0].env.map((e: any) => e.name) as string[];
+  expect(env(example)).toEqual(expect.arrayContaining(["GITHUB_APP_ID", "GITHUB_APP_KEY", "GITOPS_REPOS"]));
+  const noRepos = env({ ...example, github: { ...example.github, gitopsRepos: [] } });
+  expect(noRepos).not.toContain("GITHUB_APP_ID");
+  expect(noRepos).not.toContain("GITOPS_REPOS");
 });
 
 test.skipIf(!helm)("an ID written as a YAML number fails the render instead of turning into a float", () => {

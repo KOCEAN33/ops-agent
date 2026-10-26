@@ -2,6 +2,7 @@
 {{- $secret := required "secret.name is required" .Values.secret.name -}}
 {{- $k := .Values.secret.keys -}}
 {{- $g := .Values.github -}}
+{{- $repos := $g.gitopsRepos -}}
 {{- $discord := or .Values.discord.channelId .Values.discord.ownerId -}}
 {{- /* Helm reads an unquoted number as a float, which loses a Discord ID's
 digits and prints an App ID in exponent form. */ -}}
@@ -89,19 +90,19 @@ spec:
               value: {{ required "discord.ownerId is required with discord.channelId" .Values.discord.ownerId | quote }}
             {{- include "ops-agent.secretEnv" (dict "env" "DISCORD_BOT_TOKEN" "secret" $secret "key" $k.discordBotToken) | nindent 12 }}
             {{- end }}
-            {{- if $g.gitopsRepo }}
+            {{- if $repos }}
             - name: GITOPS_DIR
-              value: /repos/gitops/current
+              value: /repos/gitops
+            - name: GITOPS_REPOS
+              value: {{ join "," $repos | quote }}
             {{- end }}
             {{- if $g.instructionsRepo }}
             - name: INSTRUCTIONS_DIR
               value: /repos/instructions/current
             {{- end }}
-            {{- if and $g.appId $g.gitopsRepo }}
+            {{- if and $g.appId $repos }}
             - name: GITHUB_APP_ID
               value: {{ $g.appId | quote }}
-            - name: GITOPS_REPO
-              value: {{ $g.gitopsRepo | quote }}
             {{- include "ops-agent.secretEnv" (dict "env" "GITHUB_APP_KEY" "secret" $secret "key" $k.githubAppKey) | nindent 12 }}
             {{- end }}
           # The server answers 404 off its one route, so the probes check the
@@ -123,10 +124,11 @@ spec:
             - name: tmp
               mountPath: /tmp
               subPath: ops-agent
-            {{- if $g.gitopsRepo }}
-            # The whole git-sync root, since its link is relative.
-            - name: gitops
-              mountPath: /repos/gitops
+            # Each whole git-sync root, since its link is relative. The agent
+            # reads owner/name's clone at /repos/gitops/<name>/current.
+            {{- range $i, $r := $repos }}
+            - name: gitops-{{ $i }}
+              mountPath: /repos/gitops/{{ last (splitList "/" $r) }}
               readOnly: true
             {{- end }}
             {{- if $g.instructionsRepo }}
@@ -134,8 +136,10 @@ spec:
               mountPath: /repos/instructions
               readOnly: true
             {{- end }}
-        {{- with $g.gitopsRepo }}
-        {{- include "ops-agent.gitSync" (dict "root" $ "name" "gitops" "repo" .) | nindent 8 }}
+        {{- /* Named by index: a volume name is a DNS label, and a repository
+        name may not be one. */ -}}
+        {{- range $i, $r := $repos }}
+        {{- include "ops-agent.gitSync" (dict "root" $ "name" (printf "gitops-%d" $i) "repo" $r) | nindent 8 }}
         {{- end }}
         {{- with $g.instructionsRepo }}
         {{- include "ops-agent.gitSync" (dict "root" $ "name" "instructions" "repo" .) | nindent 8 }}
@@ -146,15 +150,15 @@ spec:
             claimName: {{ $fullname }}
         - name: tmp
           emptyDir: {}
-        {{- if $g.gitopsRepo }}
-        - name: gitops
+        {{- range $i, $r := $repos }}
+        - name: gitops-{{ $i }}
           emptyDir: {}
         {{- end }}
         {{- if $g.instructionsRepo }}
         - name: instructions
           emptyDir: {}
         {{- end }}
-        {{- if or $g.gitopsRepo $g.instructionsRepo }}
+        {{- if or $repos $g.instructionsRepo }}
         - name: github-app
           secret:
             secretName: {{ $secret }}

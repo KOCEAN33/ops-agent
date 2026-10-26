@@ -4,7 +4,7 @@ import { MockLanguageModelV4 } from "ai/test";
 import type { LanguageModelV4CallOptions } from "@ai-sdk/provider";
 import { z } from "zod";
 import { runTurn, type AgentDeps } from "../src/agent/turn";
-import { GoneIssue, githubApi, IssueQueue, Refused, type IssueApi } from "../src/owner/issues";
+import { GoneIssue, githubApi, IssueQueue, issueRepositoryTool, Refused, type IssueApi } from "../src/owner/issues";
 import { Store } from "../src/store";
 import { readTool, type ReadTool } from "../src/tools/contract";
 
@@ -13,15 +13,18 @@ const zero = {
   outputTokens: { total: 0, text: 0, reasoning: 0 },
 };
 
-// A model that makes the given tool call once, if any, then answers.
-function model(answer: string, call?: { tool: string; input: Record<string, unknown> }) {
+// A model that makes the given tool calls in this turn, one per step, then
+// answers.
+function model(answer: string, ...calls: { tool: string; input: Record<string, unknown> }[]) {
   return new MockLanguageModelV4({
     doGenerate: async (o: LanguageModelV4CallOptions) => {
-      if (!call || o.prompt.at(-1)!.role === "tool") {
+      const step = o.prompt.length - 1 - o.prompt.findLastIndex((m) => m.role === "user");
+      const call = calls[Math.floor(step / 2)];
+      if (!call) {
         return { content: [{ type: "text", text: answer }], finishReason: { unified: "stop", raw: "end_turn" }, usage: zero, warnings: [] };
       }
       return {
-        content: [{ type: "tool-call", toolCallId: "call-1", toolName: call.tool, input: JSON.stringify(call.input) }],
+        content: [{ type: "tool-call", toolCallId: `call-${step}`, toolName: call.tool, input: JSON.stringify(call.input) }],
         finishReason: { unified: "tool-calls", raw: "tool_use" },
         usage: zero,
         warnings: [],
@@ -57,40 +60,46 @@ async function turn(store: Store, text: string, m: MockLanguageModelV4, tools?: 
 // Records what the queue writes. fail, when set, decides whether a call throws.
 // lose, when set, makes the next open create the issue and then fail, as a
 // response lost on the way back does.
+// Issue numbers count across repositories.
 function fakeGitHub() {
-  const issues: { number: number; title: string; body: string }[] = [];
-  const comments: { issue: number; body: string }[] = [];
+  const issues: { repo: string; number: number; title: string; body: string }[] = [];
+  const comments: { repo: string; issue: number; body: string }[] = [];
   const api = {
     fail: null as null | ((call: "open" | "comment") => Error | null),
     lose: false as boolean,
-    async open(title: string, body: string) {
+    async open(repo: string, title: string, body: string) {
       const e = api.fail?.("open");
       if (e) throw e;
-      issues.push({ number: issues.length + 1, title, body });
+      issues.push({ repo, number: issues.length + 1, title, body });
       if (api.lose) {
         api.lose = false;
         throw new Error("socket closed");
       }
       return issues.length;
     },
-    async comment(issue: number, body: string) {
+    async comment(repo: string, issue: number, body: string) {
       const e = api.fail?.("comment");
       if (e) throw e;
-      comments.push({ issue, body });
+      comments.push({ repo, issue, body });
     },
-    async find(marker: string) {
-      return issues.find((i) => i.body.includes(marker))?.number ?? null;
+    async find(repo: string, marker: string) {
+      return issues.find((i) => i.repo === repo && i.body.includes(marker))?.number ?? null;
     },
   } satisfies IssueApi & { fail: unknown; lose: boolean };
   return { api, issues, comments };
 }
 
+const REPOS = ["example-owner/example-apps", "example-owner/example-platform", "example-owner/example-hosts"];
+
 function setup(linkHosts: string[] = []) {
   const store = new Store(":memory:");
   const github = fakeGitHub();
-  const queue = new IssueQueue({ store, api: github.api, linkHosts: new Set(linkHosts) });
+  const queue = new IssueQueue({ store, api: github.api, linkHosts: new Set(linkHosts), repos: REPOS });
   return { store, queue, ...github };
 }
+
+const recordTool = issueRepositoryTool(["example-apps", "example-platform", "example-hosts"]);
+const name = (repo: string) => ({ tool: "issue_repository", input: { repo } });
 
 test("a session's first finished turn opens one issue and a later turn comments on it", async () => {
   const { store, queue, issues, comments } = setup();
@@ -101,7 +110,47 @@ test("a session's first finished turn opens one issue and a later turn comments 
   expect(issues).toHaveLength(1);
   expect(issues[0]!.title).toBe("KubeJobFailed / example-app");
   expect(issues[0]!.body).toContain("first answer");
-  expect(comments).toEqual([{ issue: 1, body: expect.stringContaining("second answer") }]);
+  expect(comments).toEqual([{ repo: "example-owner/example-apps", issue: 1, body: expect.stringContaining("second answer") }]);
+});
+
+test("the issue opens on the repository the model last named, and a name off the list changes nothing", async () => {
+  const { store, queue, issues } = setup();
+  await turn(store, "alert", model("answer", name("example-hosts"), name("example-platform"), name("example-other")), recordTool);
+  await queue.flush();
+
+  expect(issues.map((i) => i.repo)).toEqual(["example-owner/example-platform"]);
+  // Recording the repository is not a query of the cluster.
+  expect(issues[0]!.body).not.toContain("issue_repository");
+});
+
+test("naming a repository again after another still makes it the last named", async () => {
+  const { store, queue, issues } = setup();
+  await turn(store, "alert", model("answer", name("example-hosts"), name("example-platform"), name("example-hosts")), recordTool);
+  await queue.flush();
+
+  expect(issues.map((i) => i.repo)).toEqual(["example-owner/example-hosts"]);
+});
+
+test("the session's first write fixes its repository, and a later turn's name is ignored", async () => {
+  const { store, queue, issues, comments } = setup();
+  await turn(store, "first alert", model("first answer"), recordTool);
+  await queue.flush();
+  await turn(store, "second alert", model("second answer", name("example-hosts")), recordTool);
+  await queue.flush();
+
+  expect(issues.map((i) => i.repo)).toEqual(["example-owner/example-apps"]);
+  expect(comments.map((c) => c.repo)).toEqual(["example-owner/example-apps"]);
+});
+
+test("an issue reopened after a deletion opens on the session's repository", async () => {
+  const { store, queue, api, issues } = setup();
+  await turn(store, "first alert", model("first answer", name("example-hosts")), recordTool);
+  await queue.flush();
+  await turn(store, "second alert", model("second answer", name("example-platform")), recordTool);
+  api.fail = (call) => (call === "comment" ? new GoneIssue("410 Gone") : null);
+  await queue.flush();
+
+  expect(issues.map((i) => i.repo)).toEqual(["example-owner/example-hosts", "example-owner/example-hosts"]);
 });
 
 // The text of each fenced block in a markdown body, with the line before it.
@@ -196,7 +245,7 @@ test("a retry after a lost response finds the issue instead of opening another",
   await queue.flush();
 
   expect(issues).toHaveLength(1);
-  expect(comments).toEqual([{ issue: 1, body: expect.stringContaining("second answer") }]);
+  expect(comments).toEqual([{ repo: "example-owner/example-apps", issue: 1, body: expect.stringContaining("second answer") }]);
 });
 
 test("a write GitHub refuses is dropped and the next one goes out", async () => {
@@ -223,6 +272,8 @@ test("a comment on a deleted issue opens a new issue", async () => {
   expect(issues[1]!.body).toContain("second answer");
 });
 
+const REPO = "example-owner/example-repo";
+
 // A GitHub API fake. respond, when set, answers an issue call first.
 const servers: { stop: (force?: boolean) => void }[] = [];
 afterEach(() => servers.splice(0).forEach((s) => s.stop(true)));
@@ -241,14 +292,14 @@ function fakeApi() {
       const auth = req.headers.get("authorization") ?? "";
       const body = req.method === "POST" ? await req.json() : null;
       seen.push({ method: req.method, path: pathname, auth, body });
-      if (pathname === "/repos/example-owner/example-repo/installation") return Response.json({ id: 7 });
+      if (/^\/repos\/example-owner\/[\w-]+\/installation$/.test(pathname)) return Response.json({ id: 7 });
       if (pathname === "/app/installations/7/access_tokens") {
         tokens++;
         return Response.json({ token: `installation-${tokens}`, expires_at: "2026-10-27T04:00:00Z" }, { status: 201 });
       }
       const r = state.respond?.(pathname);
       if (r) return r;
-      if (pathname === "/repos/example-owner/example-repo/issues" && req.method === "POST") {
+      if (/^\/repos\/example-owner\/[\w-]+\/issues$/.test(pathname) && req.method === "POST") {
         return Response.json({ number: 12 }, { status: 201 });
       }
       if (pathname.endsWith("/comments")) return Response.json({ id: 1 }, { status: 201 });
@@ -263,7 +314,6 @@ function fakeApi() {
     apiUrl: server.url.href.replace(/\/$/, ""),
     appId: "12345",
     key: privateKey.export({ type: "pkcs1", format: "pem" }).toString(),
-    repo: "example-owner/example-repo",
     now: () => new Date("2026-10-27T03:00:00Z"),
   });
   return { api, seen, state, publicKey };
@@ -271,8 +321,8 @@ function fakeApi() {
 
 test("the client signs a JWT as the app and writes with an installation token scoped to the repository", async () => {
   const { api, seen, publicKey } = fakeApi();
-  expect(await api.open("title", "body")).toBe(12);
-  await api.comment(12, "later");
+  expect(await api.open(REPO, "title", "body")).toBe(12);
+  await api.comment(REPO, 12, "later");
 
   const lookup = seen.find((s) => s.path.endsWith("/installation"))!;
   const [head, payload, sig] = lookup.auth.replace(/^Bearer /, "").split(".");
@@ -290,19 +340,38 @@ test("the client signs a JWT as the app and writes with an installation token sc
   ]);
 });
 
+test("each repository's writes use a token scoped to that repository alone", async () => {
+  const { api, seen } = fakeApi();
+  await api.open("example-owner/example-apps", "title", "body");
+  await api.open("example-owner/example-hosts", "title", "body");
+  await api.comment("example-owner/example-apps", 12, "later");
+
+  const tokenCalls = seen.filter((s) => s.path.endsWith("/access_tokens"));
+  expect(tokenCalls.map((t) => t.body)).toEqual([
+    { repositories: ["example-apps"], permissions: { issues: "write" } },
+    { repositories: ["example-hosts"], permissions: { issues: "write" } },
+  ]);
+  const writes = seen.filter((s) => /^\/repos\/[^/]+\/[^/]+\/issues/.test(s.path));
+  expect(writes.map((w) => [w.path, w.auth])).toEqual([
+    ["/repos/example-owner/example-apps/issues", "Bearer installation-1"],
+    ["/repos/example-owner/example-hosts/issues", "Bearer installation-2"],
+    ["/repos/example-owner/example-apps/issues/12/comments", "Bearer installation-1"],
+  ]);
+});
+
 test("a token GitHub rejects is replaced on the next call", async () => {
   const { api, seen, state } = fakeApi();
   let rejected = false;
   state.respond = () => (rejected ? null : ((rejected = true), new Response(null, { status: 401 })));
-  await expect(api.open("title", "body")).rejects.toThrow();
-  await api.open("title", "body");
+  await expect(api.open(REPO, "title", "body")).rejects.toThrow();
+  await api.open(REPO, "title", "body");
   expect(seen.filter((s) => s.path.endsWith("/access_tokens"))).toHaveLength(2);
 });
 
 test("the client finds a recent issue by its marker", async () => {
   const { api } = fakeApi();
-  expect(await api.find("m-1")).toBe(8);
-  expect(await api.find("m-2")).toBeNull();
+  expect(await api.find(REPO, "m-1")).toBe(8);
+  expect(await api.find(REPO, "m-2")).toBeNull();
 });
 
 test("GitHub's answers map to refused, gone, or worth a retry", async () => {
@@ -311,11 +380,11 @@ test("GitHub's answers map to refused, gone, or worth a retry", async () => {
     state.respond = () => new Response(null, { status, headers });
   };
   answer(422);
-  await expect(api.open("t", "b")).rejects.toBeInstanceOf(Refused);
+  await expect(api.open(REPO, "t", "b")).rejects.toBeInstanceOf(Refused);
   answer(410);
-  await expect(api.comment(1, "b")).rejects.toBeInstanceOf(GoneIssue);
+  await expect(api.comment(REPO, 1, "b")).rejects.toBeInstanceOf(GoneIssue);
   answer(404);
-  await expect(api.comment(1, "b")).rejects.toBeInstanceOf(GoneIssue);
+  await expect(api.comment(REPO, 1, "b")).rejects.toBeInstanceOf(GoneIssue);
   for (const [status, headers] of [
     [403, { "x-ratelimit-remaining": "0" }],
     [403, { "retry-after": "60" }],
@@ -323,7 +392,7 @@ test("GitHub's answers map to refused, gone, or worth a retry", async () => {
     [502, {}],
   ] as const) {
     answer(status, headers);
-    const e = await api.open("t", "b").catch((e) => e);
+    const e = await api.open(REPO, "t", "b").catch((e) => e);
     expect(e).toBeInstanceOf(Error);
     expect(e).not.toBeInstanceOf(Refused);
     expect(e).not.toBeInstanceOf(GoneIssue);

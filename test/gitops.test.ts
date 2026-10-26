@@ -6,8 +6,14 @@ import { gitopsTools } from "../src/tools/gitops";
 import { ToolError } from "../src/tools/contract";
 
 const outside = await mkdtemp(join(tmpdir(), "gitops-outside-"));
-const root = await mkdtemp(join(tmpdir(), "gitops-"));
-afterAll(() => Promise.all([rm(root, { recursive: true }), rm(outside, { recursive: true })]));
+// Two clones laid out as the sync sidecars leave them: <dir>/<name>/current.
+const dir = await mkdtemp(join(tmpdir(), "gitops-"));
+const root = join(dir, "example-apps", "current");
+const platform = join(dir, "example-platform", "current");
+afterAll(() => Promise.all([rm(dir, { recursive: true }), rm(outside, { recursive: true })]));
+
+await mkdir(platform, { recursive: true });
+await writeFile(join(platform, "hosts.yaml"), "memoryLimit: platform\n");
 
 await mkdir(join(root, "apps/example-app"), { recursive: true });
 await mkdir(join(root, ".git"));
@@ -41,10 +47,25 @@ await writeFile(
   ].join("\n"),
 );
 
-const tools = gitopsTools(root);
+const tools = gitopsTools(dir, ["example-apps", "example-platform"]);
 const signal = new AbortController().signal;
-const read = (path: string) => tools.gitops_read!.run({ path }, signal);
-const search = (text: string) => tools.gitops_search!.run({ text }, signal) as Promise<{ matches: { path: string; line: number; text: string }[]; more?: string }>;
+const read = (path: string, repo = "example-apps") => tools.gitops_read!.run({ repo, path }, signal);
+const search = (text: string, repo = "example-apps") =>
+  tools.gitops_search!.run({ repo, text }, signal) as Promise<{ matches: { path: string; line: number; text: string }[]; more?: string }>;
+
+test("each call reads the clone of the repository it names", async () => {
+  expect(await read("")).toMatchObject({ entries: ["README.md", "apps/"] });
+  expect(await read("", "example-platform")).toMatchObject({ entries: ["hosts.yaml"] });
+  expect(await search("memorylimit", "example-platform")).toEqual({ matches: [{ path: "hosts.yaml", line: 1, text: "memoryLimit: platform" }] });
+});
+
+test("a repository off the configured list is a bad argument", () => {
+  for (const t of [tools.gitops_read!, tools.gitops_search!]) {
+    expect(t.input.safeParse({ repo: "example-other", path: "", text: "needle" }).success).toBe(false);
+    expect(t.input.safeParse({ path: "", text: "needle" }).success).toBe(false);
+    expect(t.input.safeParse({ repo: "example-platform", path: "", text: "needle" }).success).toBe(true);
+  }
+});
 
 test("gitops_read returns a file's content", async () => {
   expect(await read("apps/example-app/deployment.yaml")).toMatchObject({ content: expect.stringContaining("memory: 512Mi") });

@@ -1,6 +1,6 @@
 # ops-agent
 
-A first responder that runs inside a homelab Kubernetes cluster and answers its alerts. When Alertmanager fires, the agent investigates with a fixed set of tools and reports in a Discord thread. When a service threatens the cluster, it takes a reversible stopgap, such as scaling that service to zero. It files the root cause as an issue on the cluster's GitOps repository, where the owner takes up the fix.
+A first responder that runs inside a homelab Kubernetes cluster and answers its alerts. When Alertmanager fires, the agent investigates with a fixed set of tools and reports in a Discord thread. When a service threatens the cluster, it takes a reversible stopgap, such as scaling that service to zero. It files the root cause as an issue on the GitOps repository that holds it, one of several the deployment lists, where the owner takes up the fix.
 
 It protects, in order, data, then security, then service. It is an operator, not an engineer: unlike [HolmesGPT](https://github.com/HolmesGPT/holmesgpt), it stops at containment and hands the analysis off.
 
@@ -10,7 +10,7 @@ Each tool is a fixed function, never a shell. Writes are limited to three revers
 
 ## Status
 
-Not yet deployed. A webhook notification starts or resumes its group's session in a durable turn queue. The agent investigates with read tools for Kubernetes, PromQL, LogQL and a clone of the GitOps repository, answers in the alert's Discord thread, and hands off to an issue on the GitOps repository through a GitHub App. Sessions, the queue, spend and both outboxes live in SQLite. The stopgap tools come next.
+Not yet deployed. A webhook notification starts or resumes its group's session in a durable turn queue. The agent investigates with read tools for Kubernetes, PromQL, LogQL and a clone of each listed GitOps repository, answers in the alert's Discord thread, and hands off to an issue on the repository the model names, or the first listed, through a GitHub App. Sessions, the queue, spend and both outboxes live in SQLite. The stopgap tools come next.
 
 ## Development
 
@@ -31,4 +31,4 @@ bun start   # POST an Alertmanager webhook payload to /alertmanager
 
 ## Deployment
 
-`chart/` is a Helm chart: one replica on a PersistentVolumeClaim, git-sync sidecars for the GitOps and instructions repositories, a NetworkPolicy that admits the webhook from Alertmanager alone, and an optional CiliumNetworkPolicy that limits egress by host name. Credentials come from an existing Secret. `chart/values.yaml` documents each value.
+`chart/` is a Helm chart: one replica on a PersistentVolumeClaim, a git-sync sidecar for each GitOps repository and one for the instructions repository, a NetworkPolicy that admits the webhook from Alertmanager alone, and an optional CiliumNetworkPolicy that limits egress by host name. Credentials come from an existing Secret. `chart/values.yaml` documents each value.

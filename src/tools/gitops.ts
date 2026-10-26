@@ -75,14 +75,18 @@ async function text(file: string, path: string) {
   return redactSecrets(t);
 }
 
-export function gitopsTools(root: string): Record<string, ReadTool> {
+// dir holds one clone per repository, at <dir>/<name>/current. names are the
+// repository names without their owner, so the model never sees an owner.
+export function gitopsTools(dir: string, names: [string, ...string[]]): Record<string, ReadTool> {
+  const repo = z.enum(names).describe("The repository to use.");
+  const root = (name: string) => join(dir, name, "current");
+  const listed = names.join(", ");
   return {
     gitops_read: readTool({
-      description:
-        "Read a file or list a directory in the cluster's GitOps repository at main. Paths are relative to the repository root, and an empty path lists the root.",
-      input: z.object({ path: z.string().max(500) }),
-      run: async ({ path }) => {
-        const { real, rel } = await resolve(root, path);
+      description: `Read a file or list a directory in a GitOps repository at main. The repositories: ${listed}. Paths are relative to the repository root, and an empty path lists the root.`,
+      input: z.object({ repo, path: z.string().max(500) }),
+      run: async ({ repo, path }) => {
+        const { real, rel } = await resolve(root(repo), path);
         if (!(await stat(real)).isDirectory()) return { path: rel, content: await text(real, rel) };
         const all = (await readdir(real, { withFileTypes: true }))
           .filter((e) => e.name !== ".git")
@@ -96,13 +100,14 @@ export function gitopsTools(root: string): Record<string, ReadTool> {
       },
     }),
     gitops_search: readTool({
-      description: `Find lines containing a text in the GitOps repository, ignoring case. Returns up to ${MAX_MATCHES} matches with their path and line number.`,
+      description: `Find lines containing a text in a GitOps repository, ignoring case. The repositories: ${listed}. Returns up to ${MAX_MATCHES} matches with their path and line number.`,
       input: z.object({
+        repo,
         text: z.string().min(2).max(200),
         path: z.string().max(500).optional().describe("A directory to search under. Defaults to the whole repository."),
       }),
-      run: async ({ text: needle, path = "" }, signal) => {
-        const { top, real } = await resolve(root, path);
+      run: async ({ repo, text: needle, path = "" }, signal) => {
+        const { top, real } = await resolve(root(repo), path);
         const want = needle.toLowerCase();
         const matches: { path: string; line: number; text: string }[] = [];
         for (const file of (await walk(top, real)).sort()) {

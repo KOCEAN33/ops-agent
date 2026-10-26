@@ -19,11 +19,15 @@ export interface Config {
   kube: { url: string; serviceAccount: boolean } | null;
   prometheusUrl: string | null;
   lokiUrl: string | null;
+  // Parent of the GitOps clones: owner/name is cloned at <gitopsDir>/<name>/current.
   gitopsDir: string | null;
+  // owner/name of each GitOps repository, the first being the default issue
+  // repository. Empty when neither reads nor issues are on.
+  gitopsRepos: string[];
   // Off when unset, as for a local run, and posts wait in the store.
   discord: { token: string; channelId: string; ownerId: string } | null;
   // Off when unset, and hand-offs wait in the store.
-  github: { appId: string; key: string; repo: string } | null;
+  github: { appId: string; key: string } | null;
   // Hosts whose links survive in Discord posts and issues.
   linkHosts: Set<string>;
 }
@@ -96,14 +100,33 @@ function discord(env: Env): Config["discord"] {
   };
 }
 
-const GITHUB_VARS = ["GITHUB_APP_ID", "GITHUB_APP_KEY", "GITOPS_REPO"];
+// Repository names, the part after the owner, name the clones and are what
+// the model sees, so they must be unique.
+function gitopsRepos(env: Env): string[] {
+  const repos = (env.GITOPS_REPOS ?? "").split(",").map((r) => r.trim()).filter(Boolean);
+  for (const r of repos) if (!/^[\w.-]+\/[\w.-]+$/.test(r)) throw new Error(`GITOPS_REPOS entry ${r} is not owner/name`);
+  const names = repos.map((r) => r.split("/")[1]!);
+  // A name joins the clone's path.
+  if (names.some((n) => n === "." || n === "..")) throw new Error("GITOPS_REPOS holds a name of . or ..");
+  const twice = names.find((n, i) => names.indexOf(n) !== i);
+  if (twice) throw new Error(`GITOPS_REPOS names ${twice} twice`);
+  return repos;
+}
 
-// Any of them set means all three, as for Discord.
-function github(env: Env): Config["github"] {
+function gitopsDir(env: Env, repos: string[]): string | null {
+  if (!env.GITOPS_DIR) return null;
+  if (repos.length === 0) throw new Error("GITOPS_REPOS is not set");
+  return env.GITOPS_DIR;
+}
+
+const GITHUB_VARS = ["GITHUB_APP_ID", "GITHUB_APP_KEY"];
+
+// Any of them set means both, as for Discord, and a repository to file on.
+function github(env: Env, repos: string[]): Config["github"] {
   if (!GITHUB_VARS.some((n) => env[n])) return null;
-  const repo = required(env, "GITOPS_REPO");
-  if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) throw new Error("GITOPS_REPO is not owner/name");
-  return { appId: required(env, "GITHUB_APP_ID"), key: required(env, "GITHUB_APP_KEY"), repo };
+  const g = { appId: required(env, "GITHUB_APP_ID"), key: required(env, "GITHUB_APP_KEY") };
+  if (repos.length === 0) throw new Error("GITOPS_REPOS is not set");
+  return g;
 }
 
 export function loadConfig(env: Env = process.env): Config {
@@ -111,6 +134,7 @@ export function loadConfig(env: Env = process.env): Config {
   // instead of the first alert.
   required(env, "ANTHROPIC_API_KEY");
   const model = required(env, "MODEL");
+  const repos = gitopsRepos(env);
   return {
     model,
     price: price(env, model),
@@ -123,9 +147,10 @@ export function loadConfig(env: Env = process.env): Config {
     kube: kube(env),
     prometheusUrl: url(env.PROMETHEUS_URL),
     lokiUrl: url(env.LOKI_URL),
-    gitopsDir: env.GITOPS_DIR || null,
+    gitopsDir: gitopsDir(env, repos),
+    gitopsRepos: repos,
     discord: discord(env),
-    github: github(env),
+    github: github(env, repos),
     linkHosts: new Set(
       (env.LINK_ALLOWLIST ?? "")
         .split(",")

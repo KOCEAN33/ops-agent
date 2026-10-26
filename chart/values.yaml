@@ -46,16 +46,19 @@ discord:
   channelId: ""
   ownerId: ""
 
-# The GitHub App, IDs quoted. appId and gitopsRepo turn issues on. Each repository set
-# also gets a git-sync sidecar that keeps a clone current with the App's
-# contents read: the GitOps clone feeds the read tools, the instructions clone
-# the operating instructions.
+# The GitHub App, IDs quoted. appId and gitopsRepos turn issues on. Each
+# repository listed also gets a git-sync sidecar that keeps a clone current with
+# the App's contents read: the GitOps clones feed the read tools, the
+# instructions clone the operating instructions.
 github:
   appId: ""
-  # git-sync needs it to mint its own token.
+  # git-sync needs it to mint its own token. One installation covers every
+  # repository below.
   installationId: ""
+  # GitOps repositories as owner/name, the first being the default issue
+  # repository. The model sees each by its name, so names must be unique.
+  gitopsRepos: []
   # owner/name
-  gitopsRepo: ""
   instructionsRepo: ""
 
 gitSync:
