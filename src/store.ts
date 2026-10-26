@@ -24,6 +24,16 @@ export interface Post {
   sentChunks: number;
 }
 
+export interface StoredMessage {
+  id: number;
+  message: ModelMessage;
+}
+
+export interface Summary {
+  throughId: number;
+  text: string;
+}
+
 export class Store {
   private db: Database;
 
@@ -68,6 +78,14 @@ export class Store {
     )`);
     this.db.run(`CREATE TABLE IF NOT EXISTS notices (
       key TEXT PRIMARY KEY
+    )`);
+    // A summary covers the session's messages up to through_id. The messages
+    // stay, so a later change of threshold can pick an older summary or none.
+    this.db.run(`CREATE TABLE IF NOT EXISTS summaries (
+      id INTEGER PRIMARY KEY,
+      session_id INTEGER NOT NULL REFERENCES sessions(id),
+      through_id INTEGER NOT NULL,
+      text TEXT NOT NULL
     )`);
   }
 
@@ -223,11 +241,22 @@ export class Store {
     );
   }
 
-  messages(sessionId: number): ModelMessage[] {
+  messages(sessionId: number): StoredMessage[] {
     return this.db
-      .query<{ message: string }, [number]>("SELECT message FROM messages WHERE session_id = ? ORDER BY id")
+      .query<{ id: number; message: string }, [number]>("SELECT id, message FROM messages WHERE session_id = ? ORDER BY id")
       .all(sessionId)
-      .map((r) => JSON.parse(r.message));
+      .map((r) => ({ id: r.id, message: JSON.parse(r.message) }));
+  }
+
+  // Oldest first.
+  summaries(sessionId: number): Summary[] {
+    return this.db
+      .query<Summary, [number]>("SELECT through_id AS throughId, text FROM summaries WHERE session_id = ? ORDER BY through_id")
+      .all(sessionId);
+  }
+
+  addSummary(sessionId: number, throughId: number, text: string) {
+    this.db.query("INSERT INTO summaries (session_id, through_id, text) VALUES (?, ?, ?)").run(sessionId, throughId, text);
   }
 
   monthSpend(month: string): number {

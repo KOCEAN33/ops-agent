@@ -49,6 +49,7 @@ function deps(m: MockLanguageModelV4, tools: Record<string, ReadTool>, over: Par
     now: () => new Date("2026-10-26T03:00:00Z"),
     tools,
     stepTimeoutMs: 60_000,
+    compaction: { maskBytes: Infinity, summaryBytes: Infinity },
     ...over,
   };
 }

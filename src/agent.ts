@@ -8,6 +8,7 @@ import {
   type LanguageModelUsage,
   type ModelMessage,
 } from "ai";
+import { history, SUMMARY_INSTRUCTIONS, type Compaction } from "./compact";
 import type { Price } from "./config";
 import type { Store, Turn } from "./store";
 import { turnTools, type ReadTool } from "./tools";
@@ -26,6 +27,9 @@ const MAX_STEPS = 25;
 // Bounds one call. Adaptive thinking counts against it too.
 export const MAX_OUTPUT_TOKENS = 16_000;
 
+// A summary asks for under 500 words. The rest is room for thinking.
+const SUMMARY_MAX_TOKENS = 4_000;
+
 export interface AgentDeps {
   model: Exclude<LanguageModel, string>;
   price: Price;
@@ -39,6 +43,7 @@ export interface AgentDeps {
   // Bounds one step: the model call, its retries and its tools. A stalled call
   // would otherwise hold one of the queue's few turn slots until a restart.
   stepTimeoutMs: number;
+  compaction: Compaction;
 }
 
 export function cost(u: LanguageModelUsage, p: Price): number {
@@ -137,10 +142,25 @@ export async function runTurn(
   let finished: ModelMessage[] = [];
   let result;
   try {
+    // The summary call goes through the same model, so it is charged to the turn.
+    const summarize = async (input: string) => {
+      const s = await generateText({
+        model,
+        instructions: SUMMARY_INSTRUCTIONS,
+        messages: [{ role: "user", content: [{ type: "text", text: input }] }],
+        maxOutputTokens: SUMMARY_MAX_TOKENS,
+        timeout: { stepMs: d.stepTimeoutMs },
+      });
+      // A stored summary stands in for its turns from then on, and the next
+      // builds on it, so a cut or empty one fails the attempt instead.
+      if (s.finishReason !== "stop" || !s.text.trim()) throw new Error(`summary ended with ${s.finishReason}`);
+      return s.text;
+    };
+    const past = await history(d.store, turn.sessionId, d.compaction, summarize);
     result = await generateText({
       model,
       instructions: [BASE_INSTRUCTIONS, await d.instructions()].filter(Boolean).join("\n\n"),
-      messages: [...d.store.messages(turn.sessionId), user],
+      messages: [...past, user],
       tools,
       maxOutputTokens: MAX_OUTPUT_TOKENS,
       timeout: { stepMs: d.stepTimeoutMs },

@@ -73,6 +73,7 @@ function deps(m: MockLanguageModelV4, over: Partial<AgentDeps> = {}): AgentDeps 
     now: () => new Date("2026-10-26T03:00:00Z"),
     tools: {},
     stepTimeoutMs: 60_000,
+    compaction: { maskBytes: Infinity, summaryBytes: Infinity },
     ...over,
   };
 }

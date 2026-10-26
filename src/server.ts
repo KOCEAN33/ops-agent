@@ -55,6 +55,10 @@ const RETRY_MS = 60_000;
 const MAX_ATTEMPTS = 3;
 // A call that writes MAX_OUTPUT_TOKENS takes a few minutes.
 const STEP_TIMEOUT_MS = 10 * 60_000;
+// Each step resends the history, and the spend middleware reserves a call at
+// one input token per prompt byte. At Claude Sonnet 5.5's price, 100 KB of
+// history reserves about 0.26 USD of input on every step.
+const COMPACTION = { maskBytes: 50_000, summaryBytes: 100_000 };
 // Every producer of a post, a restart included, is covered by one poll.
 const OUTBOX_POLL_MS = 2_000;
 
@@ -89,6 +93,7 @@ if (import.meta.main) {
     now,
     tools: await readTools(config, now),
     stepTimeoutMs: STEP_TIMEOUT_MS,
+    compaction: COMPACTION,
   };
   console.log(JSON.stringify({ msg: "tools", tools: Object.keys(agent.tools) }));
 
