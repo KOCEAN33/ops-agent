@@ -2,7 +2,7 @@
 
 Deferred work: each item names what triggers it.
 
-- **Build order after the read tools**: the Discord bot with threads, replies and approval buttons, then issues, then the Helm chart in `chart/` with its values in the GitOps repository, then the stopgap tools with their RBAC and admission policy. Each step passes the security review that `CLAUDE.md` requires.
+- **Build order after the read tools**: the Discord bot with threads, replies and approval buttons, then issues, then the Helm chart in `chart/` with its values in the GitOps repository, then the stopgap tools with their RBAC and admission policy. Each step passes the `coding-review` pass that `CLAUDE.md` requires.
 - **Mid-turn refusal drops the turn**: when a reservation is refused in the middle of a tool loop, `runTurn` in `src/agent.ts` throws `OverBudget` and discards the turn's messages, including a stopgap the turn already ran. Fix it with the first tool, before any write tool exists.
 - **Turn-cap stop test**: the `overBudget` stop condition in `src/agent.ts` has no test, because a turn without tools is one step. Add one with the first tool.
 - **Minimum share measurement**: the 20% minimum share in `docs/design.md` (Autonomous targets) is unmeasured. Before autonomous stops are turned on, have approval-path turns compute and report each candidate's share without stopping, and set the value from what real pressure shows.
