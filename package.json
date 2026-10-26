@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "bun src/server.ts",
+    "start": "bun --env-file=.env --env-file=config.env src/server.ts",
     "test": "bun test",
     "typecheck": "tsc --noEmit"
   },
