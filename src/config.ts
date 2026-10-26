@@ -15,6 +15,11 @@ export interface Config {
   webhookToken: string;
   instructionsDir: string | null;
   port: number;
+  // Each read source left unset turns its tools off.
+  kube: { url: string; serviceAccount: boolean } | null;
+  prometheusUrl: string | null;
+  lokiUrl: string | null;
+  gitopsDir: string | null;
 }
 
 type Env = Record<string, string | undefined>;
@@ -61,6 +66,18 @@ function price(env: Env, model: string): Price {
   return listed;
 }
 
+const url = (v: string | undefined) => (v ? v.replace(/\/+$/, "") : null);
+
+// KUBE_API_URL points at an API server that needs no token, such as
+// `kubectl proxy` on a workstation. In a pod, Kubernetes sets the service
+// address, and requests carry the pod's ServiceAccount token.
+function kube(env: Env): Config["kube"] {
+  if (env.KUBE_API_URL) return { url: url(env.KUBE_API_URL)!, serviceAccount: false };
+  const host = env.KUBERNETES_SERVICE_HOST;
+  if (!host) return null;
+  return { url: `https://${host.includes(":") ? `[${host}]` : host}:${env.KUBERNETES_SERVICE_PORT ?? 443}`, serviceAccount: true };
+}
+
 export function loadConfig(env: Env = process.env): Config {
   // @ai-sdk/anthropic reads the key itself. Checking it here fails the start
   // instead of the first alert.
@@ -75,5 +92,9 @@ export function loadConfig(env: Env = process.env): Config {
     webhookToken: required(env, "WEBHOOK_TOKEN"),
     instructionsDir: env.INSTRUCTIONS_DIR || null,
     port: Number(env.PORT ?? 8080),
+    kube: kube(env),
+    prometheusUrl: url(env.PROMETHEUS_URL),
+    lokiUrl: url(env.LOKI_URL),
+    gitopsDir: env.GITOPS_DIR || null,
   };
 }

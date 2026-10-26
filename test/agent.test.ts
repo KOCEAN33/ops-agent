@@ -59,6 +59,7 @@ function deps(m: MockLanguageModelV4, over: Partial<AgentDeps> = {}): AgentDeps 
     store: new Store(":memory:"),
     instructions: async () => "",
     now: () => new Date("2026-10-26T03:00:00Z"),
+    tools: {},
     ...over,
   };
 }

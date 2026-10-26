@@ -10,6 +10,7 @@ import {
 } from "ai";
 import type { Price } from "./config";
 import type { Store } from "./store";
+import { turnTools, type ReadTool } from "./tools";
 
 const BASE_INSTRUCTIONS = `You are ops-agent, the first responder for a homelab Kubernetes cluster. You investigate an alert with the tools you are given, contain the incident with a reversible stopgap when a service threatens the cluster, and hand the root cause off to the owner as an issue. You do not fix root causes yourself.
 
@@ -33,6 +34,8 @@ export interface AgentDeps {
   store: Store;
   instructions: () => Promise<string>;
   now: () => Date;
+  // Fixed for the process's life, so a session sees the same tools each turn.
+  tools: Record<string, ReadTool>;
 }
 
 export function cost(u: LanguageModelUsage, p: Price): number {
@@ -113,24 +116,35 @@ export async function runTurn(
 
   const user: ModelMessage = { role: "user", content: [{ type: "text", text }] };
   // The next prompt holds the last one plus the new step, so its worst case is
-  // at least the last one's. Stopping here keeps the turn's messages, where a
-  // refused reservation would throw them away.
+  // at least the last one's. Stopping here keeps the turn's messages without
+  // a refused call. A call can still be refused when another session spends
+  // the month in between, or a large tool result grows the next prompt.
   const overBudget = () =>
     turnSpent + lastWorst > d.turnCapUsd || d.store.monthSpend(month) + lastWorst > d.monthlyCapUsd;
+  const { tools, repeated } = turnTools(d.tools);
+  // The steps that finished before the current one. A refused call keeps them,
+  // since a tool they ran may have changed the cluster.
+  let finished: ModelMessage[] = [];
   let result;
   try {
     result = await generateText({
       model,
       instructions: [BASE_INSTRUCTIONS, await d.instructions()].filter(Boolean).join("\n\n"),
       messages: [...d.store.messages(sessionId), user],
+      tools,
       maxOutputTokens: MAX_OUTPUT_TOKENS,
       stopWhen: [isStepCount(MAX_STEPS), overBudget],
+      prepareStep: ({ responseMessages }) => {
+        finished = responseMessages;
+        return repeated() ? { toolChoice: "none" } : undefined;
+      },
     });
   } catch (e) {
     // The SDK wraps an error thrown on a retry in a RetryError.
     const refused = e instanceof OverBudget || (RetryError.isInstance(e) && e.lastError instanceof OverBudget);
     if (!refused) throw e;
     console.log(JSON.stringify({ msg: "turn refused by spend cap", sessionId, turnSpent }));
+    if (finished.length > 0) d.store.append(sessionId, [user, ...finished]);
     return { skipped: "budget" };
   }
   if (overBudget()) console.log(JSON.stringify({ msg: "turn stopped at spend cap", sessionId, turnSpent }));

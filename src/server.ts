@@ -2,8 +2,13 @@ import { anthropic } from "@ai-sdk/anthropic";
 import { timingSafeEqual } from "node:crypto";
 import { readInstructions, runTurn, type AgentDeps } from "./agent";
 import { parseWebhook } from "./alert";
-import { loadConfig } from "./config";
+import { loadConfig, type Config } from "./config";
+import { gitopsTools } from "./gitops";
+import { kubeTools } from "./kube";
+import { lokiTools, promTools } from "./query";
+import { redact } from "./redact";
 import { Store } from "./store";
+import type { ReadTool } from "./tools";
 
 export interface ServerDeps {
   store: Store;
@@ -38,9 +43,27 @@ export function createHandler(d: ServerDeps) {
   };
 }
 
+const SERVICE_ACCOUNT = "/var/run/secrets/kubernetes.io/serviceaccount";
+
+async function readTools(c: Config, now: () => Date): Promise<Record<string, ReadTool>> {
+  const k = c.kube;
+  return {
+    ...(k &&
+      kubeTools({
+        url: k.url,
+        token: async () => (k.serviceAccount ? (await Bun.file(`${SERVICE_ACCOUNT}/token`).text()).trim() : null),
+        ca: k.serviceAccount ? await Bun.file(`${SERVICE_ACCOUNT}/ca.crt`).text() : undefined,
+      })),
+    ...(c.prometheusUrl && promTools({ url: c.prometheusUrl, now })),
+    ...(c.lokiUrl && lokiTools({ url: c.lokiUrl, now })),
+    ...(c.gitopsDir && gitopsTools(c.gitopsDir)),
+  };
+}
+
 if (import.meta.main) {
   const config = loadConfig();
   const store = new Store(config.dbPath);
+  const now = () => new Date();
   const agent: AgentDeps = {
     model: anthropic(config.model),
     price: config.price,
@@ -48,8 +71,10 @@ if (import.meta.main) {
     monthlyCapUsd: config.monthlyCapUsd,
     store,
     instructions: async () => (config.instructionsDir ? readInstructions(config.instructionsDir) : ""),
-    now: () => new Date(),
+    now,
+    tools: await readTools(config, now),
   };
+  console.log(JSON.stringify({ msg: "tools", tools: Object.keys(agent.tools) }));
 
   // Turns on one session run one after another, so each sees the last one's
   // messages. Different sessions run in parallel.
@@ -58,7 +83,7 @@ if (import.meta.main) {
     const next = (queues.get(sessionId) ?? Promise.resolve())
       .then(() => runTurn(agent, sessionId, text))
       .then(
-        (r) => console.log(JSON.stringify({ msg: "turn", sessionId, ...r })),
+        (r) => console.log(JSON.stringify({ msg: "turn", sessionId, ...("text" in r ? { text: redact(r.text) } : r) })),
         (e) => console.error(JSON.stringify({ msg: "turn failed", sessionId, error: String(e) })),
       );
     queues.set(sessionId, next);
