@@ -40,7 +40,7 @@ bun run typecheck
 bun start   # POST an Alertmanager webhook payload to /alertmanager
 ```
 
-`bun start` reads its configuration from the environment and exits when a required variable is missing.
+`bun start` reads its configuration from the environment and exits when a required variable is missing. Copy `.env.example` to `.env`, which Bun loads and git ignores, and fill it in.
 
 | Variable | Meaning |
 | --- | --- |
