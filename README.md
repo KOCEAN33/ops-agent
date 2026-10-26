@@ -10,7 +10,7 @@ Each tool is a fixed function, never a shell. Writes are limited to three revers
 
 ## Status
 
-Early. A webhook notification starts or resumes its group's session, and the agent answers with a model call. Sessions and spend are stored in SQLite. Tools, the Discord bot, and issues come next.
+Not yet deployed. A webhook notification starts or resumes its group's session in a durable turn queue. The agent investigates with read tools for Kubernetes, PromQL, LogQL and a clone of the GitOps repository, answers in the alert's Discord thread, and hands off to an issue on the GitOps repository through a GitHub App. Sessions, the queue, spend and both outboxes live in SQLite. The stopgap tools come next.
 
 ## Development
 
@@ -25,16 +25,10 @@ bun start   # POST an Alertmanager webhook payload to /alertmanager
 
 `bun start` reads its configuration from the environment and exits when a required variable is missing. Copy `.env.example` to `.env`, which Bun loads and git ignores, and fill it in.
 
-| Variable | Meaning |
-| --- | --- |
-| `ANTHROPIC_API_KEY` | Anthropic API key |
-| `MODEL` | Anthropic model ID. The price comes from a table in `src/config.ts`, and an unlisted model stops the start. |
-| `PRICE_INPUT`, `PRICE_OUTPUT`, `PRICE_CACHE_READ`, `PRICE_CACHE_WRITE` | optional, all four or none, USD per million tokens. Overrides the table. |
-| `TURN_CAP_USD` | spend at which one turn stops |
-| `MONTHLY_CAP_USD` | spend at which the agent stops calling models until the month turns (UTC) |
-| `DB_PATH` | SQLite file for sessions and spend |
-| `WEBHOOK_TOKEN` | the bearer token every webhook request must carry |
-| `INSTRUCTIONS_DIR` | optional, a clone of the operating instructions, read on each turn |
-| `PORT` | optional, default 8080 |
+`.env.example` lists every variable with its meaning. The required ones are `ANTHROPIC_API_KEY`, `MODEL`, `TURN_CAP_USD`, `MONTHLY_CAP_USD`, `DB_PATH` and `WEBHOOK_TOKEN`. Each read source, the Discord bot and issues stay off until their variables are set.
 
 `test/payloads/` holds sample webhook payloads in the Alertmanager v4 format.
+
+## Deployment
+
+`chart/` is a Helm chart: one replica on a PersistentVolumeClaim, git-sync sidecars for the GitOps and instructions repositories, a NetworkPolicy that admits the webhook from Alertmanager alone, and an optional CiliumNetworkPolicy that limits egress by host name. Credentials come from an existing Secret. `chart/values.yaml` documents each value.
