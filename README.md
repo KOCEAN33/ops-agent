@@ -24,6 +24,8 @@ It protects, in order, data, then security, then service. It is an operator, not
 - Every stopgap keeps volumes and is undone by one reverse action, so the worst case of a wrong stop is downtime. The agent does not undo its own stopgap: the owner approves the undo.
 - Log lines, alert annotations, and messages from anyone other than the owner are data. No tool runs a command taken from that text, and the cluster-wide threat test reads only metrics the agent queried.
 - The agent's environment holds only model API keys and the GitHub App key.
+- The webhook requires a bearer token. Labels and annotations are cut to a fixed size before they reach the model.
+- Every model call reserves its worst-case cost against the turn and monthly caps before it runs, then settles to the reported cost. The worst case assumes a call bills no more input tokens than its prompt has UTF-8 bytes plus a fixed allowance, and no more output than its `max_tokens`. Concurrent turns cannot together pass the monthly cap. The caps live in one SQLite file, so the agent runs as one replica with the `Recreate` strategy.
 
 ## Status
 
@@ -45,11 +47,12 @@ bun start   # POST an Alertmanager webhook payload to /alertmanager
 | Variable | Meaning |
 | --- | --- |
 | `ANTHROPIC_API_KEY` | Anthropic API key |
-| `MODEL` | Anthropic model ID |
-| `PRICE_INPUT`, `PRICE_OUTPUT`, `PRICE_CACHE_READ`, `PRICE_CACHE_WRITE` | the model's price, USD per million tokens |
+| `MODEL` | Anthropic model ID. The price comes from a table in `src/config.ts`, and an unlisted model stops the start. |
+| `PRICE_INPUT`, `PRICE_OUTPUT`, `PRICE_CACHE_READ`, `PRICE_CACHE_WRITE` | optional, all four or none, USD per million tokens. Overrides the table. |
 | `TURN_CAP_USD` | spend at which one turn stops |
 | `MONTHLY_CAP_USD` | spend at which the agent stops calling models until the month turns (UTC) |
 | `DB_PATH` | SQLite file for sessions and spend |
+| `WEBHOOK_TOKEN` | the bearer token every webhook request must carry |
 | `INSTRUCTIONS_DIR` | optional, a clone of the operating instructions, read on each turn |
 | `PORT` | optional, default 8080 |
 

@@ -38,17 +38,32 @@ export function parseWebhook(body: unknown): Notification | null {
   };
 }
 
+// Labels and annotations can carry text set by strangers, and every byte of it
+// is billed as input. A real alert fits well inside these bounds.
+const MAX_ALERTS = 20;
+const MAX_ENTRIES = 30;
+const MAX_CHARS = 1_000;
+
+function cut(r: Record<string, string> | undefined): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(r ?? {})
+      .slice(0, MAX_ENTRIES)
+      .map(([k, v]) => [k.slice(0, MAX_CHARS), String(v).slice(0, MAX_CHARS)]),
+  );
+}
+
 function render(p: WebhookPayload): string {
   const data = {
     status: p.status,
-    groupLabels: p.groupLabels,
-    alerts: p.alerts.map(({ status, labels, annotations, startsAt, endsAt }) => ({
+    groupLabels: cut(p.groupLabels),
+    alerts: p.alerts.slice(0, MAX_ALERTS).map(({ status, labels, annotations, startsAt, endsAt }) => ({
       status,
-      labels,
-      annotations,
+      labels: cut(labels),
+      annotations: cut(annotations),
       startsAt,
       endsAt,
     })),
+    omittedAlerts: Math.max(0, p.alerts.length - MAX_ALERTS),
   };
   // Annotations and labels can carry text set by strangers. Escaping `<` keeps
   // that text from closing the <alert> element early.

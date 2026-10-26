@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { MockLanguageModelV4 } from "ai/test";
-import type { LanguageModelUsage } from "ai";
-import { cost, runTurn, type AgentDeps } from "../src/agent";
+import { APICallError, type LanguageModelUsage } from "ai";
+import { cost, MAX_OUTPUT_TOKENS, runTurn, type AgentDeps } from "../src/agent";
 import { Store } from "../src/store";
 
 // USD per million tokens.
@@ -89,6 +89,107 @@ test("once the month's spend reaches the cap, no model call is made", async () =
   expect(await runTurn(d, sessionId, "second")).toEqual({ skipped: "monthly-cap" });
   expect(m.doGenerateCalls).toHaveLength(1);
 });
+
+// Output priced at 50 USD per million tokens makes the worst case of one call
+// at least MAX_OUTPUT_TOKENS * 50 / 1e6 USD before input.
+const pricey = { input: 2, output: 50, cacheRead: 0.1, cacheWrite: 2.5 };
+
+test("turns on different sessions cannot together pass the monthly cap", async () => {
+  let release!: () => void;
+  const gate = new Promise<void>((r) => (release = r));
+  const m = new MockLanguageModelV4({
+    doGenerate: async () => {
+      await gate;
+      return {
+        content: [{ type: "text", text: "ok" }],
+        finishReason: { unified: "stop", raw: "end_turn" },
+        usage: {
+          inputTokens: { total: 0, noCache: 0, cacheRead: 0, cacheWrite: 0 },
+          outputTokens: { total: 0, text: 0, reasoning: 0 },
+        },
+        warnings: [],
+      };
+    },
+  });
+  const worstOutput = (MAX_OUTPUT_TOKENS * pricey.output) / 1e6;
+  // Room for one call's worst case, not two.
+  const d = deps(m, { price: pricey, monthlyCapUsd: worstOutput * 1.5, turnCapUsd: worstOutput * 10 });
+  const a = d.store.noteFiring({ alertname: "A", namespace: null }, ["a"]).sessionId;
+  const b = d.store.noteFiring({ alertname: "B", namespace: null }, ["b"]).sessionId;
+
+  const turns = Promise.all([runTurn(d, a, "first"), runTurn(d, b, "second")]);
+  await Bun.sleep(0);
+  release();
+  const results = await turns;
+
+  expect(m.doGenerateCalls).toHaveLength(1);
+  expect(results).toContainEqual({ skipped: "budget" });
+});
+
+test("a call whose worst case exceeds the turn cap is never made", async () => {
+  const m = model(() => "ok");
+  const worstOutput = (MAX_OUTPUT_TOKENS * pricey.output) / 1e6;
+  const d = deps(m, { price: pricey, turnCapUsd: worstOutput / 2, monthlyCapUsd: 100 });
+  const { sessionId } = d.store.noteFiring({ alertname: "A", namespace: null }, ["a"]);
+
+  expect(await runTurn(d, sessionId, "alert")).toEqual({ skipped: "budget" });
+  expect(m.doGenerateCalls).toHaveLength(0);
+});
+
+test("a model call is limited to MAX_OUTPUT_TOKENS", async () => {
+  const m = model(() => "ok");
+  const d = deps(m);
+  const { sessionId } = d.store.noteFiring({ alertname: "A", namespace: null }, ["a"]);
+  await runTurn(d, sessionId, "alert");
+  expect(m.doGenerateCalls[0]!.maxOutputTokens).toBe(MAX_OUTPUT_TOKENS);
+});
+
+function failing(error: () => Error) {
+  return new MockLanguageModelV4({
+    doGenerate: async () => {
+      throw error();
+    },
+  });
+}
+
+const apiError = (statusCode: number) =>
+  new APICallError({ message: "x", url: "https://example.com", requestBodyValues: {}, statusCode, isRetryable: false });
+
+test("a call the API answered with 200 keeps its reservation when its body fails to parse", async () => {
+  const worstOutput = (MAX_OUTPUT_TOKENS * pricey.output) / 1e6;
+  const store = new Store(":memory:");
+  const caps = { price: pricey, monthlyCapUsd: worstOutput * 1.5, turnCapUsd: worstOutput * 10, store };
+  const { sessionId } = store.noteFiring({ alertname: "A", namespace: null }, ["a"]);
+
+  await expect(runTurn(deps(failing(() => apiError(200)), caps), sessionId, "first")).rejects.toThrow();
+  const next = model(() => "ok");
+  expect(await runTurn(deps(next, caps), sessionId, "second")).toEqual({ skipped: "budget" });
+  expect(next.doGenerateCalls).toHaveLength(0);
+});
+
+test("a call the API refused with an error status is not charged", async () => {
+  const worstOutput = (MAX_OUTPUT_TOKENS * pricey.output) / 1e6;
+  const store = new Store(":memory:");
+  const caps = { price: pricey, monthlyCapUsd: worstOutput * 1.5, turnCapUsd: worstOutput * 10, store };
+  const { sessionId } = store.noteFiring({ alertname: "A", namespace: null }, ["a"]);
+
+  await expect(runTurn(deps(failing(() => apiError(400)), caps), sessionId, "first")).rejects.toThrow();
+  expect(await runTurn(deps(model(() => "ok"), caps), sessionId, "second")).toEqual({ text: "ok" });
+});
+
+test("a reservation refused on a retry still reports the budget", async () => {
+  const store = new Store(":memory:");
+  const d = deps(
+    failing(() => {
+      // Another session spends the rest of the month while this call fails.
+      store.addSpend("2026-10", 1_000);
+      return new APICallError({ message: "overloaded", url: "https://example.com", requestBodyValues: {}, statusCode: 529, isRetryable: true });
+    }),
+    { store },
+  );
+  const { sessionId } = store.noteFiring({ alertname: "A", namespace: null }, ["a"]);
+  expect(await runTurn(d, sessionId, "alert")).toEqual({ skipped: "budget" });
+}, 15_000);
 
 test("the monthly cap resets when the month turns", async () => {
   const m = model(() => "ok", { noCache: 1_000_000, output: 500_000 });

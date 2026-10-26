@@ -63,6 +63,18 @@ export class Store {
     return this.db.query<{ usd: number }, [string]>("SELECT usd FROM spend WHERE month = ?").get(month)?.usd ?? 0;
   }
 
+  // Adds usd to the month's spend only if the total stays within cap. A caller
+  // reserves a call's worst case here before making it and settles the
+  // difference with addSpend afterwards, so concurrent turns cannot all pass
+  // the same reading of the spend.
+  reserve(month: string, usd: number, cap: number): boolean {
+    return this.db.transaction(() => {
+      if (this.monthSpend(month) + usd > cap) return false;
+      this.addSpend(month, usd);
+      return true;
+    })();
+  }
+
   addSpend(month: string, usd: number) {
     this.db
       .query("INSERT INTO spend (month, usd) VALUES (?, ?) ON CONFLICT (month) DO UPDATE SET usd = usd + excluded.usd")

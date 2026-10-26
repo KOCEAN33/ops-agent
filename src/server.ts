@@ -1,4 +1,5 @@
 import { anthropic } from "@ai-sdk/anthropic";
+import { timingSafeEqual } from "node:crypto";
 import { readInstructions, runTurn, type AgentDeps } from "./agent";
 import { parseWebhook } from "./alert";
 import { loadConfig } from "./config";
@@ -6,7 +7,17 @@ import { Store } from "./store";
 
 export interface ServerDeps {
   store: Store;
+  token: string;
   startTurn: (sessionId: number, text: string) => void;
+}
+
+// Alertmanager sends the token through webhook_config.http_config.authorization.
+// Any pod that reaches the Service can POST here, and a forged notification
+// both spends credit and writes into a session's history.
+function authorized(req: Request, token: string): boolean {
+  const got = Buffer.from(req.headers.get("authorization") ?? "");
+  const want = Buffer.from(`Bearer ${token}`);
+  return got.length === want.length && timingSafeEqual(got, want);
 }
 
 export function createHandler(d: ServerDeps) {
@@ -15,6 +26,7 @@ export function createHandler(d: ServerDeps) {
     if (req.method !== "POST" || pathname !== "/alertmanager") {
       return new Response(null, { status: 404 });
     }
+    if (!authorized(req, d.token)) return new Response(null, { status: 401 });
     const n = parseWebhook(await req.json().catch(() => null));
     if (!n) return new Response(null, { status: 400 });
     const { sessionId, changed } = d.store.noteFiring(n.key, n.firing);
@@ -52,6 +64,11 @@ if (import.meta.main) {
     queues.set(sessionId, next);
   };
 
-  const server = Bun.serve({ port: config.port, fetch: createHandler({ store, startTurn }) });
+  const server = Bun.serve({
+    port: config.port,
+    // A notification is a few kilobytes. Bun's default allows 128 MB.
+    maxRequestBodySize: 1024 * 1024,
+    fetch: createHandler({ store, token: config.webhookToken, startTurn }),
+  });
   console.log(`listening on ${server.url}`);
 }
