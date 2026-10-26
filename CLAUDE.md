@@ -1,8 +1,10 @@
 # ops-agent
 
+NEXT SESSION: read `docs/NEXT.md` FIRST.
+
 The owner's in-cluster first responder. It takes an Alertmanager webhook, investigates the alert, takes a reversible stopgap when a service threatens the cluster, and files the root cause as an issue on the cluster's GitOps repository. It talks to the owner in the alert's Discord thread.
 
-`docs/design.md` holds the owner's decisions in Chosen, the threat model, and the decisions still due in Open. Read it before changing shape here, take an Open item to the owner before building it, and record a new decision there.
+`docs/design.md` holds the owner's decisions in Chosen, the threat model, and the decisions still due in Open. Read it before changing shape here, take an Open item to the owner before building it, and record a new decision there. Deferred work, each item with its trigger, is `docs/candidates.md`.
 
 This repository is public. The threat model in `docs/design.md` lists what stays out of code, fixtures, docs and commits. Use `example.com` values and generic names in test payloads. Code reads every in-cluster URL, namespace name and credential from the environment.
 
