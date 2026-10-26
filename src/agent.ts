@@ -71,6 +71,9 @@ function providerUsage(u: {
 // as the tool-use system prompt.
 const INPUT_ALLOWANCE_TOKENS = 4_000;
 
+// A turn cut off before its answer still tells the owner it ran.
+const STOPPED = "Stopped before answering: this turn reached its spend or step limit.";
+
 class OverBudget extends Error {
   constructor(readonly cap: "turn-cap" | "monthly-cap") {
     super(cap);
@@ -159,13 +162,13 @@ export async function runTurn(
       return { skipped: "monthly-cap" };
     }
     console.log(JSON.stringify({ msg: "turn refused by spend cap", sessionId: turn.sessionId, turnSpent }));
-    d.store.endTurn(turn.id, "budget", finished.length > 0 ? [user, ...finished] : []);
+    d.store.endTurn(turn.id, "budget", finished.length > 0 ? [user, ...finished] : [], STOPPED);
     return { skipped: "budget" };
   }
   if (overBudget()) {
     console.log(JSON.stringify({ msg: "turn stopped at spend cap", sessionId: turn.sessionId, turnSpent: d.store.turnSpend(turn.id) }));
   }
-  d.store.endTurn(turn.id, "done", [user, ...result.responseMessages]);
+  d.store.endTurn(turn.id, "done", [user, ...result.responseMessages], result.text || STOPPED);
   return { text: result.text };
 }
 

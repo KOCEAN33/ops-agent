@@ -31,7 +31,7 @@ function queue(store: Store, run: QueueDeps["run"], over: Partial<QueueDeps> = {
 
 // Ends the turn as runTurn does when it answers.
 const answer = (store: Store, t: Turn) => {
-  store.endTurn(t.id, "done", []);
+  store.endTurn(t.id, "done", [], "ok");
   return { text: "ok" };
 };
 
@@ -186,4 +186,46 @@ test("no more turns run at once than the limit", async () => {
   g.release(g.started[0]!);
   await until(() => g.started.length === 3);
   expect(g.running.size).toBe(2);
+});
+
+test("a turn ended at the attempt limit tells its thread once", async () => {
+  const store = new Store(":memory:");
+  notify(store, "A", "alert");
+  queue(store, async () => {
+    throw new Error("model unavailable");
+  });
+
+  await until(() => store.pending().length === 0);
+  const post = store.nextPost()!;
+  expect(post.text).toContain("failed 3 times");
+  store.postSent(post.id);
+  expect(store.nextPost()).toBeNull();
+});
+
+test("the monthly cap is announced once a month, however many turns it holds back", async () => {
+  const store = new Store(":memory:");
+  notify(store, "A", "a");
+  notify(store, "B", "b");
+  // A running clock, since a retry waits for it to pass the next attempt time.
+  let offset = Date.parse("2026-10-30T00:00:00Z") - Date.now();
+  let refusals = 0;
+  queue(store, async () => (refusals++, { skipped: "monthly-cap" as const }), {
+    now: () => new Date(Date.now() + offset),
+  });
+  const channelPosts = () => {
+    const out: (number | null)[] = [];
+    for (let p = store.nextPost(); p; p = store.nextPost()) {
+      out.push(p.sessionId);
+      store.postSent(p.id);
+    }
+    return out;
+  };
+
+  await until(() => refusals >= 6);
+  expect(channelPosts()).toEqual([null]);
+
+  offset = Date.parse("2026-11-01T00:00:00Z") - Date.now();
+  const before = refusals;
+  await until(() => refusals >= before + 2);
+  expect(channelPosts()).toEqual([null]);
 });

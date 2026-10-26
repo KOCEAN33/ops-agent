@@ -2,6 +2,7 @@ import { anthropic } from "@ai-sdk/anthropic";
 import { timingSafeEqual } from "node:crypto";
 import { readInstructions, runTurn, type AgentDeps } from "./agent";
 import { parseWebhook } from "./alert";
+import { connect, onMessage, Outbox } from "./discord";
 import { loadConfig, type Config } from "./config";
 import { gitopsTools } from "./gitops";
 import { kubeTools } from "./kube";
@@ -54,6 +55,8 @@ const RETRY_MS = 60_000;
 const MAX_ATTEMPTS = 3;
 // A call that writes MAX_OUTPUT_TOKENS takes a few minutes.
 const STEP_TIMEOUT_MS = 10 * 60_000;
+// Every producer of a post, a restart included, is covered by one poll.
+const OUTBOX_POLL_MS = 2_000;
 
 const SERVICE_ACCOUNT = "/var/run/secrets/kubernetes.io/serviceaccount";
 
@@ -99,6 +102,15 @@ if (import.meta.main) {
   });
   // Turns a crash or a restart cut short run again.
   queue.kick();
+
+  const d = config.discord;
+  if (d) {
+    const api = connect(d.token, (m) => onMessage({ store, ownerId: d.ownerId, kick: () => queue.kick() }, m));
+    const outbox = new Outbox({ store, api, channelId: d.channelId, linkHosts: config.linkHosts });
+    setInterval(() => void outbox.flush(), OUTBOX_POLL_MS);
+  } else {
+    console.log(JSON.stringify({ msg: "discord off: posts wait in the store" }));
+  }
 
   const server = Bun.serve({
     port: config.port,

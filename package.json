@@ -13,6 +13,9 @@
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^4.0.88",
+    "@discordjs/core": "^2.6.0",
+    "@discordjs/rest": "^2.6.3",
+    "@discordjs/ws": "^2.0.4",
     "ai": "^7.0.153",
     "zod": "^4.6.7"
   }

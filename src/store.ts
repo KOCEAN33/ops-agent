@@ -15,6 +15,15 @@ export type TurnEnd = "done" | "budget" | "attempts";
 
 export type Reservation = "ok" | "turn-cap" | "monthly-cap";
 
+// A message waiting for Discord. A post without a session goes to the channel.
+export interface Post {
+  id: number;
+  sessionId: number | null;
+  text: string;
+  // Messages of the post already sent, so a retry resumes after them.
+  sentChunks: number;
+}
+
 export class Store {
   private db: Database;
 
@@ -43,6 +52,23 @@ export class Store {
       spent_usd REAL NOT NULL DEFAULT 0,
       ended TEXT
     )`);
+    // The starter message is recorded before its thread opens, so a retry
+    // opens the thread on it instead of posting another.
+    this.db.run(`CREATE TABLE IF NOT EXISTS threads (
+      session_id INTEGER PRIMARY KEY REFERENCES sessions(id),
+      starter_id TEXT NOT NULL,
+      thread_id TEXT UNIQUE
+    )`);
+    this.db.run(`CREATE TABLE IF NOT EXISTS posts (
+      id INTEGER PRIMARY KEY,
+      session_id INTEGER REFERENCES sessions(id),
+      text TEXT NOT NULL,
+      sent_chunks INTEGER NOT NULL DEFAULT 0,
+      state TEXT
+    )`);
+    this.db.run(`CREATE TABLE IF NOT EXISTS notices (
+      key TEXT PRIMARY KEY
+    )`);
   }
 
   // Records the group's firing fingerprints and, when they changed, queues a
@@ -68,11 +94,13 @@ export class Store {
         this.db.query("UPDATE sessions SET firing = ? WHERE id = ?").run(firing, row.id);
         sessionId = row.id;
       }
-      const { lastInsertRowid } = this.db
-        .query("INSERT INTO turns (session_id, text) VALUES (?, ?)")
-        .run(sessionId, text);
-      return { sessionId, turnId: Number(lastInsertRowid) };
+      return { sessionId, turnId: this.addTurn(sessionId, text) };
     })();
+  }
+
+  addTurn(sessionId: number, text: string): number {
+    const { lastInsertRowid } = this.db.query("INSERT INTO turns (session_id, text) VALUES (?, ?)").run(sessionId, text);
+    return Number(lastInsertRowid);
   }
 
   // Every turn not yet ended, oldest first.
@@ -95,6 +123,9 @@ export class Store {
       if (!row) return null;
       if (row.attempts >= maxAttempts) {
         this.db.query("UPDATE turns SET ended = 'attempts' WHERE id = ?").run(turnId);
+        this.db
+          .query("INSERT INTO posts (session_id, text) SELECT session_id, ? FROM turns WHERE id = ?")
+          .run(`This alert's turn failed ${maxAttempts} times and was dropped. The agent's log holds the errors.`, turnId);
         return null;
       }
       // After the last attempt fails, the next claim only ends the turn, so it
@@ -115,14 +146,81 @@ export class Store {
     this.db.query("UPDATE turns SET attempts = attempts - 1, next_at = ? WHERE id = ?").run(nextAt, turnId);
   }
 
-  // Appends the turn's messages and ends it in one transaction, so a turn
-  // either ran and left its messages or stays pending and runs again.
-  endTurn(turnId: number, end: TurnEnd, messages: ModelMessage[]) {
+  // Appends the turn's messages, queues its post to the owner and ends it in
+  // one transaction, so a turn either ran and left both or stays pending and
+  // runs again.
+  endTurn(turnId: number, end: TurnEnd, messages: ModelMessage[], post: string) {
     const insert = this.db.query("INSERT INTO messages (session_id, message) SELECT session_id, ? FROM turns WHERE id = ?");
     this.db.transaction(() => {
       for (const m of messages) insert.run(JSON.stringify(m), turnId);
+      this.db.query("INSERT INTO posts (session_id, text) SELECT session_id, ? FROM turns WHERE id = ?").run(post, turnId);
       this.db.query("UPDATE turns SET ended = ? WHERE id = ?").run(end, turnId);
     })();
+  }
+
+  // Queues a channel post the first time key is seen.
+  noticeOnce(key: string, text: string) {
+    this.db.transaction(() => {
+      if (this.db.query("INSERT OR IGNORE INTO notices (key) VALUES (?)").run(key).changes === 0) return;
+      this.db.query("INSERT INTO posts (session_id, text) VALUES (NULL, ?)").run(text);
+    })();
+  }
+
+  // The oldest post not yet sent or dropped.
+  nextPost(): Post | null {
+    return this.db
+      .query<Post, []>(
+        "SELECT id, session_id AS sessionId, text, sent_chunks AS sentChunks FROM posts WHERE state IS NULL ORDER BY id LIMIT 1",
+      )
+      .get();
+  }
+
+  postProgress(postId: number, sentChunks: number) {
+    this.db.query("UPDATE posts SET sent_chunks = ? WHERE id = ?").run(sentChunks, postId);
+  }
+
+  postSent(postId: number) {
+    this.db.query("UPDATE posts SET state = 'sent' WHERE id = ?").run(postId);
+  }
+
+  // A post Discord refused would otherwise hold back every post after it.
+  postDropped(postId: number) {
+    this.db.query("UPDATE posts SET state = 'dropped' WHERE id = ?").run(postId);
+  }
+
+  // The session's alert group, which names its thread.
+  groupKey(sessionId: number): GroupKey {
+    const row = this.db.query<{ k: string }, [number]>("SELECT group_key AS k FROM sessions WHERE id = ?").get(sessionId);
+    const [alertname, namespace] = JSON.parse(row!.k);
+    return { alertname, namespace };
+  }
+
+  thread(sessionId: number): { starterId: string; threadId: string | null } | null {
+    return this.db
+      .query<{ starterId: string; threadId: string | null }, [number]>(
+        "SELECT starter_id AS starterId, thread_id AS threadId FROM threads WHERE session_id = ?",
+      )
+      .get(sessionId);
+  }
+
+  setStarter(sessionId: number, starterId: string) {
+    this.db.query("INSERT INTO threads (session_id, starter_id) VALUES (?, ?)").run(sessionId, starterId);
+  }
+
+  setThread(sessionId: number, threadId: string) {
+    this.db.query("UPDATE threads SET thread_id = ? WHERE session_id = ?").run(threadId, sessionId);
+  }
+
+  // The thread or its starter is gone, so the next post starts both again.
+  forgetThread(sessionId: number) {
+    this.db.query("DELETE FROM threads WHERE session_id = ?").run(sessionId);
+  }
+
+  sessionForThread(threadId: string): number | null {
+    return (
+      this.db.query<{ s: number }, [string]>("SELECT session_id AS s FROM threads WHERE thread_id = ?").get(threadId)?.s ??
+      null
+    );
   }
 
   messages(sessionId: number): ModelMessage[] {

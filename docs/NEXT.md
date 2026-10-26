@@ -2,16 +2,19 @@
 
 ## Goal
 
-A deployed first responder per `docs/design.md`. Built in `src/` and run against the real API: the webhook, the durable turn queue, the session store, the model loop, the spend guard, and the read tools for Kubernetes, PromQL, LogQL and the GitOps clone. The Discord bot comes next, then the build order in `docs/candidates.md`.
+A deployed first responder per `docs/design.md`. Built in `src/`: the webhook, the durable turn queue, the session store, the model loop, the spend guard, the read tools for Kubernetes, PromQL, LogQL and the GitOps clone, and the Discord bot with threads, owner replies and an outbox. Context compaction and issues come next, then the build order in `docs/candidates.md`.
 
 ## Next steps
 
-1. **Build the Discord bot.** Threads, owner replies and approval buttons per `docs/design.md` (Owner channel, Session, Credentials, Threat model). Done when `bun test` shows an alert's first turn opens a thread and later turns post in it, a reply from the owner's ID queues a turn on that session and a reply from any other ID queues nothing, posts go out with embeds suppressed and off-allowlist links stripped, and a turn ended by the attempt limit or deferred by the monthly cap says so once in the thread. `src/queue.ts` logs both today, at `turn ended at attempt limit` and in the `monthly-cap` branch.
+1. **Compact session context.** Session history grows without bound, and owner replies lengthen it, so a long-lived session's worst case eventually passes `TURN_CAP_USD` and every turn in it is refused. Replace old tool output with a short marker first, and summarize only past a higher threshold: measured on coding benchmarks, that order cost least at an equal success rate. Done when `bun test` shows a session whose history passes a size threshold sends old tool output as a short marker, a session past a higher threshold sends a summary in place of its oldest turns, and the stored messages stay whole so a later change of threshold applies to them.
+2. **Open issues.** Per `docs/design.md` (Hand-off, Credentials, Threat model). Done when `bun test` shows a session's first finished turn opens one issue on the GitOps repository through the GitHub App, a later turn on the session comments on that issue, stranger text sits in fenced blocks marked as quoted alert data, and the body is redacted and loses links and images whose host is off `LINK_ALLOWLIST`. Issue writes go through a durable queue like the Discord outbox in `src/discord.ts`.
 
 ## Pointers
 
-- Local `main` holds design commits not yet on `origin/main`. The owner pushes them: an agent's `git push` is blocked by the permission classifier. Check `git status -sb` before building on the remote.
+- Local `main` holds commits not yet on `origin/main`. The owner pushes them: an agent's `git push` is blocked by the permission classifier. Check `git status -sb` before building on the remote.
 - A real call on Claude Sonnet 5.5 costs under a cent: `bun start`, then POST `test/payloads/kube-job-failed.json` with the webhook bearer token. Set `DB_PATH` and `WEBHOOK_TOKEN` on the command line to keep the run off the configured database. A real tool loop costs about 4 cents: point `PROMETHEUS_URL` and `LOKI_URL` at a local `Bun.serve` fake.
+- `.env` is closed to agents. A real run lets `bun` read it, with test values set on the command line.
+- The Discord bot has run only against a fake and against Discord with an invalid token, which logs `401: Unauthorized` once and stops the gateway while the webhook stays up. Its first real run needs the owner's bot, with the Message Content intent on, invited to the channel with the permissions in `docs/design.md` (Credentials), and `DISCORD_*` set.
 - A turn cut by a restart runs again after `RETRY_MS` in `src/server.ts`, 60 seconds, not at once. The cut call stays charged at its worst case, about 0.17 USD on Sonnet 5.5 for a one-alert turn.
 - The read tools have run only against fakes. The first run in a pod shows whether `fetch` with `tls.ca` reaches the API server and whether its Table output matches the fixtures in `test/kube.test.ts`.
-- A queue test whose turn never ends can spin in microtasks and keep `bun test` from exiting. Run such a test under `perl -e 'alarm 20; exec @ARGV' bun test ...`, since macOS has no `timeout`.
+- A queue or outbox test whose loop never ends can keep `bun test` from exiting. Run such a test under `perl -e 'alarm 20; exec @ARGV' bun test ...`, since macOS has no `timeout`.

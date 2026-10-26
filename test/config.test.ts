@@ -56,3 +56,24 @@ test("a read source left unset turns its tools off", () => {
   const c = loadConfig({ ...base, MODEL: "claude-sonnet-5-5" });
   expect([c.kube, c.prometheusUrl, c.lokiUrl, c.gitopsDir]).toEqual([null, null, null, null]);
 });
+
+const discordVars = { DISCORD_BOT_TOKEN: "t", DISCORD_CHANNEL_ID: "1", DISCORD_OWNER_ID: "2" };
+
+test("the Discord bot is off without its variables and on with all three", () => {
+  expect(loadConfig({ ...base, MODEL: "claude-sonnet-5-5" }).discord).toBeNull();
+  expect(loadConfig({ ...base, MODEL: "claude-sonnet-5-5", ...discordVars }).discord).toEqual({
+    token: "t",
+    channelId: "1",
+    ownerId: "2",
+  });
+});
+
+test("a partial Discord configuration fails at start", () => {
+  const { DISCORD_OWNER_ID: _, ...partial } = discordVars;
+  expect(() => loadConfig({ ...base, MODEL: "claude-sonnet-5-5", ...partial })).toThrow(/DISCORD_OWNER_ID/);
+});
+
+test("LINK_ALLOWLIST lists hosts, case and spaces ignored", () => {
+  const c = loadConfig({ ...base, MODEL: "claude-sonnet-5-5", LINK_ALLOWLIST: " Grafana.example.com, github.com ," });
+  expect([...c.linkHosts]).toEqual(["grafana.example.com", "github.com"]);
+});

@@ -241,3 +241,19 @@ test("a model call that stalls fails the attempt instead of holding a turn slot"
   await expect(runTurn(d, notify(d.store, { alertname: "A", namespace: null }, "alert"))).rejects.toThrow();
   expect(d.store.pending()).toHaveLength(1);
 });
+
+test("a finished turn queues its answer for the owner", async () => {
+  const d = deps(model(() => "found the cause"));
+  const turn = notify(d.store, { alertname: "A", namespace: null }, "alert");
+  await runTurn(d, turn);
+  expect(d.store.nextPost()).toMatchObject({ sessionId: turn.sessionId, text: "found the cause" });
+});
+
+test("a turn ended by its spend cap still tells the owner", async () => {
+  const m = model(() => "ok");
+  const worstOutput = (MAX_OUTPUT_TOKENS * pricey.output) / 1e6;
+  const d = deps(m, { price: pricey, turnCapUsd: worstOutput / 2 });
+  const turn = notify(d.store, { alertname: "A", namespace: null }, "alert");
+  await runTurn(d, turn);
+  expect(d.store.nextPost()?.text).toContain("spend");
+});

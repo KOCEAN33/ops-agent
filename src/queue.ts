@@ -1,6 +1,9 @@
 import { redact } from "./redact";
 import type { Store, Turn } from "./store";
 
+const MONTHLY_CAP_NOTICE =
+  "The monthly model spend cap is reached. Alerts wait uninvestigated until the month turns (UTC), and still reach Discord through Alertmanager.";
+
 export interface QueueDeps {
   store: Store;
   run: (turn: Turn) => Promise<{ text: string } | { skipped: "monthly-cap" | "budget" }>;
@@ -63,7 +66,9 @@ export class TurnQueue {
       .then(
         (r) => {
           if ("skipped" in r && r.skipped === "monthly-cap") {
-            this.d.store.defer(turn.id, this.d.now().getTime() + this.d.retryMs);
+            const now = this.d.now();
+            this.d.store.defer(turn.id, now.getTime() + this.d.retryMs);
+            this.d.store.noticeOnce(`monthly-cap ${now.toISOString().slice(0, 7)}`, MONTHLY_CAP_NOTICE);
           }
           console.log(JSON.stringify({ msg: "turn", sessionId, ...("text" in r ? { text: redact(r.text) } : r) }));
         },
