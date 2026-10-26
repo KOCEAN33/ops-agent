@@ -6,6 +6,8 @@ The design lives in `../homelab-platform/docs/plans/ops-agent.md`: its Chosen se
 
 This repository is public. Hostnames, addresses, vault paths, and anything from llm-wiki stay out of code, fixtures, and commits. Use `example.com` values in test payloads.
 
+Deployment manifests live in the private repository `homelab-workloads`, under `ops-agent/`, not here. Code reads every in-cluster URL and namespace name from the environment.
+
 Operating instructions are the private repository `ops-agent-instructions`, cloned beside this one. The agent loads them at run time.
 
 ## Stack

@@ -27,7 +27,7 @@ It protects, in order, data, then security, then service. It is an operator, not
 
 ## Status
 
-Early. The webhook endpoint accepts an Alertmanager payload and logs its group key. The agent loop, tools, Discord bot, and deployment manifests come next.
+Early. A webhook notification starts or resumes its group's session, and the agent answers with a model call. Sessions and spend are stored in SQLite. Tools, the Discord bot, and issues come next.
 
 ## Development
 
@@ -37,7 +37,20 @@ Requires [Bun](https://bun.sh).
 bun install
 bun test
 bun run typecheck
-PORT=8080 bun start   # POST an Alertmanager webhook payload to /alertmanager
+bun start   # POST an Alertmanager webhook payload to /alertmanager
 ```
+
+`bun start` reads its configuration from the environment and exits when a required variable is missing.
+
+| Variable | Meaning |
+| --- | --- |
+| `ANTHROPIC_API_KEY` | Anthropic API key |
+| `MODEL` | Anthropic model ID |
+| `PRICE_INPUT`, `PRICE_OUTPUT`, `PRICE_CACHE_READ`, `PRICE_CACHE_WRITE` | the model's price, USD per million tokens |
+| `TURN_CAP_USD` | spend at which one turn stops |
+| `MONTHLY_CAP_USD` | spend at which the agent stops calling models until the month turns (UTC) |
+| `DB_PATH` | SQLite file for sessions and spend |
+| `INSTRUCTIONS_DIR` | optional, a clone of the operating instructions, read on each turn |
+| `PORT` | optional, default 8080 |
 
 `test/payloads/` holds sample webhook payloads in the Alertmanager v4 format.
