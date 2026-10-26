@@ -36,9 +36,9 @@ test("a webhook returns the alert group key and starts a turn", async () => {
   const { turns, post } = setup();
   const res = await post("/alertmanager", await payload("kube-job-failed"));
   expect(res.status).toBe(202);
-  expect(await res.json()).toEqual({ alertname: "KubeJobFailed", namespace: "gallery-dl" });
+  expect(await res.json()).toEqual({ alertname: "KubeJobFailed", namespace: "example-app" });
   expect(turns).toHaveLength(1);
-  expect(turns[0]!.text).toContain("Job gallery-dl/gallery-dl-29870000 failed to complete.");
+  expect(turns[0]!.text).toContain("Job example-app/example-app-29870000 failed to complete.");
 });
 
 test("a group without a namespace label has a null namespace", async () => {

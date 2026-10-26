@@ -66,7 +66,7 @@ function deps(m: MockLanguageModelV4, over: Partial<AgentDeps> = {}): AgentDeps 
 test("a later turn carries the session's earlier messages", async () => {
   const m = model((n) => `reply ${n}`);
   const d = deps(m);
-  const { sessionId } = d.store.noteFiring({ alertname: "KubeJobFailed", namespace: "gallery-dl" }, ["a"]);
+  const { sessionId } = d.store.noteFiring({ alertname: "KubeJobFailed", namespace: "example-app" }, ["a"]);
 
   await runTurn(d, sessionId, "first alert");
   await runTurn(d, sessionId, "second alert");

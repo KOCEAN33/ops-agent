@@ -6,14 +6,14 @@
       "status": "firing",
       "labels": {
         "alertname": "KubeJobFailed",
-        "cluster": "homelab",
-        "job_name": "gallery-dl-29870000",
-        "namespace": "gallery-dl",
-        "prometheus": "monitoring/kps",
+        "cluster": "example",
+        "job_name": "example-app-29870000",
+        "namespace": "example-app",
+        "prometheus": "example/prometheus",
         "severity": "warning"
       },
       "annotations": {
-        "description": "Job gallery-dl/gallery-dl-29870000 failed to complete.",
+        "description": "Job example-app/example-app-29870000 failed to complete.",
         "summary": "Job failed to complete."
       },
       "startsAt": "2026-10-26T03:00:00Z",
@@ -22,21 +22,21 @@
       "fingerprint": "3f1c2a9b7d4e5f60"
     }
   ],
-  "groupLabels": { "alertname": "KubeJobFailed", "namespace": "gallery-dl" },
+  "groupLabels": { "alertname": "KubeJobFailed", "namespace": "example-app" },
   "commonLabels": {
     "alertname": "KubeJobFailed",
-    "cluster": "homelab",
-    "job_name": "gallery-dl-29870000",
-    "namespace": "gallery-dl",
-    "prometheus": "monitoring/kps",
+    "cluster": "example",
+    "job_name": "example-app-29870000",
+    "namespace": "example-app",
+    "prometheus": "example/prometheus",
     "severity": "warning"
   },
   "commonAnnotations": {
-    "description": "Job gallery-dl/gallery-dl-29870000 failed to complete.",
+    "description": "Job example-app/example-app-29870000 failed to complete.",
     "summary": "Job failed to complete."
   },
   "externalURL": "https://alertmanager.example.com",
   "version": "4",
-  "groupKey": "{}/{severity=\"warning\"}:{alertname=\"KubeJobFailed\", namespace=\"gallery-dl\"}",
+  "groupKey": "{}/{severity=\"warning\"}:{alertname=\"KubeJobFailed\", namespace=\"example-app\"}",
   "truncatedAlerts": 0
 }

@@ -1,17 +1,16 @@
 # ops-agent
 
-The owner's in-cluster first responder. It takes an Alertmanager webhook, investigates the alert, takes a reversible stopgap when a service threatens the cluster, and files the root cause as an issue on `homelab-platform`. It talks to the owner in the alert's Discord thread.
+The owner's in-cluster first responder. It takes an Alertmanager webhook, investigates the alert, takes a reversible stopgap when a service threatens the cluster, and files the root cause as an issue on the cluster's GitOps repository. It talks to the owner in the alert's Discord thread.
 
-The design lives in `../homelab-platform/docs/plans/ops-agent.md`: its Chosen section holds the owner's decisions, its Open section the ones still due. Read it before changing shape here, and take an Open item to the owner before building it. Record a decision there, not in this repository.
+`docs/design.md` holds the owner's decisions in Chosen, the threat model, and the decisions still due in Open. Read it before changing shape here, take an Open item to the owner before building it, and record a new decision there.
 
-This repository is public. Hostnames, addresses, vault paths, and anything from llm-wiki stay out of code, fixtures, and commits. Use `example.com` values in test payloads.
+This repository is public. The threat model in `docs/design.md` lists what stays out of code, fixtures, docs and commits. Use `example.com` values and generic names in test payloads. Code reads every in-cluster URL, namespace name and credential from the environment.
 
-Deployment manifests live in the private repository `homelab-workloads`, under `ops-agent/`, not here. Code reads every in-cluster URL and namespace name from the environment.
-
-Operating instructions are the private repository `ops-agent-instructions`, cloned beside this one. The agent loads them at run time.
+Every change gets a security review from a separate agent before its commit. Give the reviewer the diff and the threat model, not your conclusions. Fix what it finds, or tell the owner why not.
 
 ## Stack
 
 - Bun and TypeScript. `bun test` and `bun run typecheck` both pass before a commit.
-- Models go through the Vercel AI SDK: `ai` with `@ai-sdk/anthropic`, `@openrouter/ai-sdk-provider`, and `@ai-sdk/openai-compatible` for OrcaRouter. The loop, session store, and context compaction are built here.
+- Models go through the Vercel AI SDK, `ai` with `@ai-sdk/anthropic`. OpenRouter and OrcaRouter join through `@openrouter/ai-sdk-provider` and `@ai-sdk/openai-compatible` when their keys exist.
+- Every model call goes through the spend middleware in `src/agent.ts`. A call made around it escapes both caps.
 - The webhook groups by `alertname` and `namespace`, read from `groupLabels`. One group is one session.

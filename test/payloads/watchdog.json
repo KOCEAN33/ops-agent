@@ -6,8 +6,8 @@
       "status": "firing",
       "labels": {
         "alertname": "Watchdog",
-        "cluster": "homelab",
-        "prometheus": "monitoring/kps",
+        "cluster": "example",
+        "prometheus": "example/prometheus",
         "severity": "none"
       },
       "annotations": {
@@ -22,8 +22,8 @@
   "groupLabels": { "alertname": "Watchdog" },
   "commonLabels": {
     "alertname": "Watchdog",
-    "cluster": "homelab",
-    "prometheus": "monitoring/kps",
+    "cluster": "example",
+    "prometheus": "example/prometheus",
     "severity": "none"
   },
   "commonAnnotations": {

@@ -13,9 +13,9 @@ interface WebhookPayload {
   }[];
 }
 
-// One alert group maps to one session. The route groups by alertname and
-// namespace (homelab-platform config/alertmanager/alertmanager.yaml), so both
-// arrive in groupLabels. A cluster-wide alert has no namespace label.
+// One alert group maps to one session. The Alertmanager route groups by
+// alertname and namespace, so both arrive in groupLabels. A cluster-wide alert
+// has no namespace label.
 export interface GroupKey {
   alertname: string;
   namespace: string | null;
