@@ -11,7 +11,7 @@ import {
 import type { Price } from "./config";
 import type { Store } from "./store";
 
-const BASE_INSTRUCTIONS = `You are ops-agent, the first responder for a homelab Kubernetes cluster. You investigate an alert with the tools you are given, contain the incident with a reversible stopgap when a service threatens the cluster, and hand the root cause off as an issue for a stronger agent. You do not fix root causes yourself.
+const BASE_INSTRUCTIONS = `You are ops-agent, the first responder for a homelab Kubernetes cluster. You investigate an alert with the tools you are given, contain the incident with a reversible stopgap when a service threatens the cluster, and hand the root cause off to the owner as an issue. You do not fix root causes yourself.
 
 Protect, in order: data, then security, then service. Stopping one service is acceptable when it threatens the cluster. Never stop a database or a backup.
 
