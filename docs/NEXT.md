@@ -11,10 +11,11 @@ A deployed first responder per `docs/design.md`. Built and running in the cluste
 3. **Typing indicator.** The owner sees nothing in the thread while a turn runs. Send Discord's typing indicator to the session's thread every 8 seconds from the turn's start until its post is queued, since one call lasts 10 seconds. A failed typing call is ignored. Done when a reply in a thread shows the bot typing until the answer posts.
 4. **Metrics.** Build `/metrics` per Metrics in `docs/design.md`, the chart's PodMonitor and the NetworkPolicy rule for the scraper. It changes a boundary, so the `coding-review` pass follows the commit. Done when Grafana shows a test alert's turn spend.
 5. **SQLite durability.** Build the Litestream sidecar and restore per SQLite durability in `docs/design.md`. The owner makes the R2 bucket and a token scoped to it and adds both to the secret store. It changes the credentials and egress, so the `coding-review` pass follows the commit. Done when a pod started on an empty volume restores the file. Due before the stopgap tools.
+6. **Spend seed.** Build the seed per Spend seed after a lost file in `docs/design.md`, after step 4 exports the counter. Done when a start on an empty file with no restore seeds the month's spend from the counter.
 
 ## Pointers
 
-- A monthly spend limit in the Anthropic console is unconfirmed. Set by the owner, it bounds what a lost SQLite file can cost, since the agent's own monthly cap restarts at zero.
+- The Anthropic console limits the organization's monthly spend to 100 USD, above the agent's 50 USD cap. It bounds what a lost SQLite file can cost, since the agent's own monthly cap would restart at zero.
 - Check `git status -sb` before building on the remote. The owner has let agents push here.
 - A real call on Claude Sonnet 5.5 costs under a cent: `bun start`, then POST `test/payloads/kube-job-failed.json` with the webhook bearer token. Set `DB_PATH` and `WEBHOOK_TOKEN` on the command line to keep the run off the configured database. A real tool loop costs about 4 cents: point `PROMETHEUS_URL` and `LOKI_URL` at a local `Bun.serve` fake.
 - `.env` is closed to agents. A real run lets `bun` read it, with test values set on the command line.
