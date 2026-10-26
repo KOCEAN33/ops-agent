@@ -2,22 +2,26 @@
 
 ## Goal
 
-A deployed first responder per `docs/design.md`. Built: the agent in `src/` (webhook, durable turn queue, session store with context compaction, model loop, spend guard, read tools, Discord bot, issue hand-off), the Helm chart in `chart/`, and the image in `Dockerfile` with its GHCR workflow. Next is the first deployment, then the build order in `docs/candidates.md`.
+A deployed first responder per `docs/design.md`. Built and running in the cluster: the agent in `src/`, the Helm chart in `chart/`, and the image from the GHCR workflow. A test alert opened a Discord thread, an owner reply ran a second turn, and the issue opened and took a comment on the default GitOps repository. Next are the three fixes below, then the build order in `docs/candidates.md`.
 
 ## Next steps
 
-1. **First deployment.** The owner pushes `main`, and the `image` workflow pushes the image to GHCR. The cluster's GitOps repository then gets the release: an Application pinning the chart to a commit, values pinning the image by digest, and an ExternalSecret for the Secret the chart reads. That repository has its own `CLAUDE.md`, and Argo CD applies what lands on its `main`, so work there with the owner. Done when an alert opens a thread in Discord from the pod, a reply runs a second turn, and the issue opens on a listed GitOps repository.
+1. **Answer states the hand-off.** Code files every finished turn as an issue, but `BASE_INSTRUCTIONS` in `src/agent/turn.ts` does not say so, and the first live answer said it opened no issue while that answer became the issue body. Tell the model that its answer becomes the issue on the repository it names. Done when a test alert's answer no longer denies the issue.
+2. **Container logs tool.** The agent reads pods and events but no container log, so on the first live run it guessed a crash cause from events alone. Add a read tool for a container's current and previous log, tail-capped, redacted like other tool output. ClusterRole `view` already grants `pods/log`. Record it under Tools in `docs/design.md` before building, since log text is stranger text. Done when a turn reads a crashed container's previous log.
+3. **Typing indicator.** The owner sees nothing in the thread while a turn runs. Send Discord's typing indicator to the session's thread every 8 seconds from the turn's start until its post is queued, since one call lasts 10 seconds. A failed typing call is ignored. Done when a reply in a thread shows the bot typing until the answer posts.
 
 ## Pointers
 
-- Local `main` holds commits not yet on `origin/main`. The owner pushes them: an agent's `git push` is blocked by the permission classifier. Check `git status -sb` before building on the remote.
+- Check `git status -sb` before building on the remote. The owner has let agents push here.
 - A real call on Claude Sonnet 5.5 costs under a cent: `bun start`, then POST `test/payloads/kube-job-failed.json` with the webhook bearer token. Set `DB_PATH` and `WEBHOOK_TOKEN` on the command line to keep the run off the configured database. A real tool loop costs about 4 cents: point `PROMETHEUS_URL` and `LOKI_URL` at a local `Bun.serve` fake.
 - `.env` is closed to agents. A real run lets `bun` read it, with test values set on the command line.
 - The Discord bot has run against the owner's server from a workstation: an alert opened a thread with the answer, and an owner reply in it ran a second turn on the same session. `DISCORD_*` and `LINK_ALLOWLIST` sit in `.env`. A token Discord rejects logs `401: Unauthorized` once and stops the gateway while the webhook stays up.
 - A turn cut by a restart runs again after `RETRY_MS` in `src/server.ts`, 60 seconds, not at once. The cut call stays charged at its worst case, about 0.17 USD on Sonnet 5.5 for a one-alert turn.
-- The read tools have run only against fakes. The first run in a pod shows whether `fetch` with `tls.ca` reaches the API server and whether its Table output matches the fixtures in `test/kube.test.ts`.
-- The workflow builds linux/amd64 alone, which matches the cluster's nodes. A new GHCR package may start private, and then the registry's pull-through cache needs credentials or the package goes public.
-- The image runs read-only as UID 65533 under `docker run --read-only --tmpfs /tmp`. The chart has run only through `helm template`: git-sync's App auth, the probes under the NetworkPolicy and Cilium's `*.discord.gg` match are unverified in a cluster.
-- Issues have run only against fakes. `GITHUB_APP_ID`, `GITHUB_APP_KEY` (the App's PEM) and `GITOPS_REPOS` (a comma list of `owner/name`, the first being the default issue repository) turn them on. The first real run shows whether the App's installation accepts a token scoped to issues write. GitHub's `/markdown` API rendered a sample body with only allowlisted links live.
+- In the pod, `kube_list` reached the API server with the ServiceAccount's CA and parsed its Table output. The PromQL and LogQL tools have not run against the real endpoints yet.
+- The workflow builds linux/amd64 alone, which matches the cluster's nodes. The GHCR package is public, so the registry's pull-through cache needs no credentials. The image is tagged `sha-<full commit>`.
+- The chart runs in the cluster: git-sync clones every repository with the App's token, the probes pass under the NetworkPolicy, and the Discord gateway connects through Cilium's FQDN egress. git-sync needs `--git-config=safe.directory:/git`, because the emptyDir is root-owned with fsGroup's group.
+- The deployment lives in the GitOps repository named in the owner's notes, which pins the chart by commit and the image by digest. A chart fix reaches the cluster only when that pin moves.
+- A smoke test: port-forward the Alertmanager Service, POST a `severity: warning` alert with a 5-minute `endsAt` to `/api/v2/alerts`, and watch the agent's log for `alert group`. It posts to Discord and opens a real issue.
+- Issues run live: the installation accepts a token scoped to issues write on one repository. `GITHUB_APP_ID`, `GITHUB_APP_KEY` and `GITOPS_REPOS` turn them on. The key in the secret store must keep its line breaks: a PEM pasted into a 1Password field through the app loses them.
 - Context compaction has run only against a mock model. Its thresholds, `COMPACTION` in `src/server.ts`, and the summary prompt in `src/agent/compact.ts` are unmeasured.
 - A queue or outbox test whose loop never ends can keep `bun test` from exiting. Run such a test under `perl -e 'alarm 20; exec @ARGV' bun test ...`, since macOS has no `timeout`.
