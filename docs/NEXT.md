@@ -2,11 +2,11 @@
 
 ## Goal
 
-A deployed first responder per `docs/design.md`. Built and running in the cluster: the agent in `src/`, the Helm chart in `chart/`, and the image from the GHCR workflow. A test alert opened a Discord thread, an owner reply ran a second turn, and the issue opened and took a comment on the default GitOps repository. Next are the three fixes below, then the build order in `docs/candidates.md`.
+A deployed first responder per `docs/design.md`. Built and running in the cluster: the agent in `src/`, the Helm chart in `chart/`, and the image from the GHCR workflow. A test alert opened a Discord thread, an owner reply ran a second turn, and the issue opened and took a comment on the default GitOps repository. Next are the steps below, then the build order in `docs/candidates.md`.
 
 ## Next steps
 
-1. **Answer states the hand-off.** Code files every finished turn as an issue, but `BASE_INSTRUCTIONS` in `src/agent/turn.ts` does not say so, and the first live answer said it opened no issue while that answer became the issue body. Tell the model that its answer becomes the issue on the repository it names. Done when a test alert's answer no longer denies the issue.
+1. **Issue as a summary.** The issue holds the symptom, the cause found and the actions taken, kept current by replacing its body, per Hand-off and Issues in `docs/design.md`. Today each turn comments its full answer, queries and alert data. Build the record-only summary tool, the fallback for a turn with no call, and the body replacement. `BASE_INSTRUCTIONS` in `src/agent/turn.ts` must tell the model that its summary becomes the issue: the first live answer said it opened no issue while that answer became the issue body. Done when a test alert and an owner reply leave one issue with the three sections and no comments.
 2. **Container logs tool.** The agent reads pods and events but no container log, so on the first live run it guessed a crash cause from events alone. Add a read tool for a container's current and previous log, tail-capped, redacted like other tool output. ClusterRole `view` already grants `pods/log`. Record it under Tools in `docs/design.md` before building, since log text is stranger text. Done when a turn reads a crashed container's previous log.
 3. **Typing indicator.** The owner sees nothing in the thread while a turn runs. Send Discord's typing indicator to the session's thread every 8 seconds from the turn's start until its post is queued, since one call lasts 10 seconds. A failed typing call is ignored. Done when a reply in a thread shows the bot typing until the answer posts.
 
