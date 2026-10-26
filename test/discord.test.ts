@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { onMessage, Outbox, Refused, UnknownChannel, type DiscordApi, type Message } from "../src/discord";
+import { onMessage, Outbox, Refused, UnknownChannel, type DiscordApi, type Message } from "../src/owner/discord";
 import { Store } from "../src/store";
 
 const CHANNEL = "100";

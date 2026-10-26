@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { readTool, ToolError, type ReadTool } from "./tools";
+import { readTool, ToolError, type ReadTool } from "./contract";
 
 export interface QueryDeps {
   // The base URL, without a trailing slash.

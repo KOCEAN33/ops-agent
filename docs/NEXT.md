@@ -19,5 +19,5 @@ A deployed first responder per `docs/design.md`. Built: the agent in `src/` (web
 - The workflow builds linux/amd64 alone, which matches the cluster's nodes. A new GHCR package may start private, and then the registry's pull-through cache needs credentials or the package goes public.
 - The image runs read-only as UID 65533 under `docker run --read-only --tmpfs /tmp`. The chart has run only through `helm template`: git-sync's App auth, the probes under the NetworkPolicy and Cilium's `*.discord.gg` match are unverified in a cluster.
 - Issues have run only against fakes. `GITHUB_APP_ID`, `GITHUB_APP_KEY` (the App's PEM) and `GITOPS_REPO` (`owner/name`) turn them on. The first real run shows whether the App's installation accepts a token scoped to issues write. GitHub's `/markdown` API rendered a sample body with only allowlisted links live.
-- Context compaction has run only against a mock model. Its thresholds, `COMPACTION` in `src/server.ts`, and the summary prompt in `src/compact.ts` are unmeasured.
+- Context compaction has run only against a mock model. Its thresholds, `COMPACTION` in `src/server.ts`, and the summary prompt in `src/agent/compact.ts` are unmeasured.
 - A queue or outbox test whose loop never ends can keep `bun test` from exiting. Run such a test under `perl -e 'alarm 20; exec @ARGV' bun test ...`, since macOS has no `timeout`.

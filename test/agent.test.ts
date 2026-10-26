@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MockLanguageModelV4 } from "ai/test";
 import { APICallError, type LanguageModelUsage } from "ai";
-import { cost, MAX_OUTPUT_TOKENS, readInstructions, runTurn, type AgentDeps } from "../src/agent";
+import { cost, MAX_OUTPUT_TOKENS, readInstructions, runTurn, type AgentDeps } from "../src/agent/turn";
 import { Store } from "../src/store";
 import type { GroupKey } from "../src/alert";
 

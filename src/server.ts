@@ -1,16 +1,16 @@
 import { anthropic } from "@ai-sdk/anthropic";
 import { timingSafeEqual } from "node:crypto";
-import { readInstructions, runTurn, type AgentDeps } from "./agent";
+import { readInstructions, runTurn, type AgentDeps } from "./agent/turn";
 import { parseWebhook } from "./alert";
-import { connect, onMessage, Outbox } from "./discord";
+import { connect, onMessage, Outbox } from "./owner/discord";
 import { loadConfig, type Config } from "./config";
-import { gitopsTools } from "./gitops";
-import { githubApi, IssueQueue } from "./issues";
-import { kubeTools } from "./kube";
-import { lokiTools, promTools } from "./query";
+import { gitopsTools } from "./tools/gitops";
+import { githubApi, IssueQueue } from "./owner/issues";
+import { kubeTools } from "./tools/kube";
+import { lokiTools, promTools } from "./tools/query";
 import { TurnQueue } from "./queue";
 import { Store } from "./store";
-import type { ReadTool } from "./tools";
+import type { ReadTool } from "./tools/contract";
 
 export interface ServerDeps {
   store: Store;

@@ -2,9 +2,9 @@ import { expect, test } from "bun:test";
 import { MockLanguageModelV4 } from "ai/test";
 import type { LanguageModelV4Prompt } from "@ai-sdk/provider";
 import { z } from "zod";
-import { MAX_OUTPUT_TOKENS, runTurn, type AgentDeps } from "../src/agent";
+import { MAX_OUTPUT_TOKENS, runTurn, type AgentDeps } from "../src/agent/turn";
 import { Store } from "../src/store";
-import { MAX_RESULT_CHARS, readTool, ToolError, type ReadTool } from "../src/tools";
+import { MAX_RESULT_CHARS, readTool, ToolError, type ReadTool } from "../src/tools/contract";
 
 const price = { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 };
 const zero = {

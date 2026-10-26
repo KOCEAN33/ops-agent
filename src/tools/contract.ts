@@ -1,6 +1,6 @@
 import { jsonSchema, tool, type ToolSet } from "ai";
 import { z } from "zod";
-import { redact } from "./redact";
+import { redact } from "../redact";
 
 // Every byte of a result is billed as input on each later step of the turn.
 export const MAX_RESULT_CHARS = 30_000;

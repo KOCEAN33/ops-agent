@@ -1,6 +1,6 @@
 import { afterAll, expect, test } from "bun:test";
-import { lokiTools, promTools } from "../src/query";
-import { ToolError } from "../src/tools";
+import { lokiTools, promTools } from "../src/tools/query";
+import { ToolError } from "../src/tools/contract";
 
 const seen: URL[] = [];
 let respond: () => Response = () => new Response(null, { status: 500 });

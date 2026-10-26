@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
 import type { ModelMessage } from "ai";
 import type { GroupKey } from "./alert";
-import type { Handoff } from "./issues";
+import type { Handoff } from "./owner/issues";
 
 export interface Turn {
   id: number;

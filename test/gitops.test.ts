@@ -2,8 +2,8 @@ import { afterAll, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { gitopsTools } from "../src/gitops";
-import { ToolError } from "../src/tools";
+import { gitopsTools } from "../src/tools/gitops";
+import { ToolError } from "../src/tools/contract";
 
 const outside = await mkdtemp(join(tmpdir(), "gitops-outside-"));
 const root = await mkdtemp(join(tmpdir(), "gitops-"));

@@ -1,5 +1,5 @@
 import type { ModelMessage } from "ai";
-import type { Store, StoredMessage, Summary } from "./store";
+import type { Store, StoredMessage, Summary } from "../store";
 
 // Sizes in UTF-8 bytes of the stored messages, the measure the spend
 // middleware reserves on.

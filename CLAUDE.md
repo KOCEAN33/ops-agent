@@ -14,5 +14,6 @@ A separate agent runs the `coding-review` skill, which covers security, at two p
 
 - Bun and TypeScript. `bun test` and `bun run typecheck` both pass before a commit.
 - Models go through the Vercel AI SDK, `ai` with `@ai-sdk/anthropic`. OpenRouter and OrcaRouter join through `@openrouter/ai-sdk-provider` and `@ai-sdk/openai-compatible` when their keys exist.
-- Every model call goes through the spend middleware in `src/agent.ts`. A call made around it escapes both caps.
+- Every model call goes through the spend middleware in `src/agent/turn.ts`. A call made around it escapes both caps.
+- `src/` groups code by concern: `agent/` holds the model loop and context compaction, `tools/` the tool contract and the read tools, `owner/` what reaches the owner (Discord and issues). Wiring, config, the store, the turn queue and the webhook parser sit at the top.
 - The webhook groups by `alertname` and `namespace`, read from `groupLabels`. One group is one session.

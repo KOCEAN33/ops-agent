@@ -10,10 +10,10 @@ import {
 } from "ai";
 import { existsSync } from "node:fs";
 import { history, SUMMARY_INSTRUCTIONS, type Compaction } from "./compact";
-import type { Price } from "./config";
-import { handoff } from "./issues";
-import type { Store, Turn } from "./store";
-import { turnTools, type ReadTool } from "./tools";
+import type { Price } from "../config";
+import { handoff } from "../owner/issues";
+import type { Store, Turn } from "../store";
+import { turnTools, type ReadTool } from "../tools/contract";
 
 const BASE_INSTRUCTIONS = `You are ops-agent, the first responder for a homelab Kubernetes cluster. You investigate an alert with the tools you are given, contain the incident with a reversible stopgap when a service threatens the cluster, and hand the root cause off to the owner as an issue. You do not fix root causes yourself.
 

@@ -1,8 +1,8 @@
 import { Client, GatewayDispatchEvents, GatewayIntentBits, MessageFlags, RESTJSONErrorCodes } from "@discordjs/core";
 import { DiscordAPIError, REST } from "@discordjs/rest";
 import { WebSocketManager, WebSocketShardEvents } from "@discordjs/ws";
-import { redact } from "./redact";
-import type { Post, Store } from "./store";
+import { clean } from "./links";
+import type { Post, Store } from "../store";
 
 export interface Message {
   content: string;
@@ -28,20 +28,9 @@ export class UnknownChannel extends Error {}
 const MAX_CHARS = 2_000;
 const MAX_THREAD_NAME = 100;
 
-// Text in a post can come from injected alert or log text through the model.
-// Redaction keeps secrets out. Embeds stay off and links off the allowlist go,
-// so Discord fetches no URL that carries cluster state out, and no mention in
-// the text pings anyone.
-export function clean(text: string, linkHosts: ReadonlySet<string>): string {
-  // No word boundary before the scheme: Discord links `_https://...` too.
-  return redact(text).replace(/[a-z][a-z0-9+.-]*:\/\/[^\s<>]+/gi, (url) => {
-    try {
-      if (linkHosts.has(new URL(url).hostname.toLowerCase())) return url;
-    } catch {}
-    return "[link removed]";
-  });
-}
 
+// Embeds stay off, so Discord fetches no link the text keeps, and no mention in
+// the text pings anyone.
 function message(content: string): Message {
   return { content, flags: MessageFlags.SuppressEmbeds, allowed_mentions: { parse: [] } };
 }

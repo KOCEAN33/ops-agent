@@ -3,10 +3,10 @@ import { generateKeyPairSync, verify } from "node:crypto";
 import { MockLanguageModelV4 } from "ai/test";
 import type { LanguageModelV4CallOptions } from "@ai-sdk/provider";
 import { z } from "zod";
-import { runTurn, type AgentDeps } from "../src/agent";
-import { GoneIssue, githubApi, IssueQueue, Refused, type IssueApi } from "../src/issues";
+import { runTurn, type AgentDeps } from "../src/agent/turn";
+import { GoneIssue, githubApi, IssueQueue, Refused, type IssueApi } from "../src/owner/issues";
 import { Store } from "../src/store";
-import { readTool, type ReadTool } from "../src/tools";
+import { readTool, type ReadTool } from "../src/tools/contract";
 
 const zero = {
   inputTokens: { total: 0, noCache: 0, cacheRead: 0, cacheWrite: 0 },

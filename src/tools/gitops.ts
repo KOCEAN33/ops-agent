@@ -1,7 +1,7 @@
 import { readdir, readFile, realpath, stat } from "node:fs/promises";
 import { join, relative, sep } from "node:path";
 import { z } from "zod";
-import { readTool, ToolError, type ReadTool } from "./tools";
+import { readTool, ToolError, type ReadTool } from "./contract";
 
 const MAX_FILE_BYTES = 1024 * 1024;
 const MAX_ENTRIES = 500;

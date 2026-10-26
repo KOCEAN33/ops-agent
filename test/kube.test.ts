@@ -1,6 +1,6 @@
 import { afterAll, expect, test } from "bun:test";
-import { kubeTools } from "../src/kube";
-import { ToolError } from "../src/tools";
+import { kubeTools } from "../src/tools/kube";
+import { ToolError } from "../src/tools/contract";
 
 type Seen = { path: string; query: URLSearchParams; accept: string | null; authorization: string | null };
 const seen: Seen[] = [];

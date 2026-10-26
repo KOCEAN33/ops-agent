@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { readTool, ToolError, type ReadTool } from "./tools";
+import { readTool, ToolError, type ReadTool } from "./contract";
 
 export interface KubeConn {
   // The API server's base URL, without a trailing slash.

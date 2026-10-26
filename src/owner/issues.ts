@@ -1,8 +1,8 @@
 import type { ModelMessage } from "ai";
 import { createPrivateKey, sign, type KeyObject } from "node:crypto";
-import { clean } from "./discord";
-import type { IssueWrite, Store } from "./store";
-import { unwrap } from "./tools";
+import { clean } from "./links";
+import type { IssueWrite, Store } from "../store";
+import { unwrap } from "../tools/contract";
 
 // What one turn hands off to the owner's issue. The store keeps it raw, and the
 // queue cleans it when it writes, as the outbox does for posts.
