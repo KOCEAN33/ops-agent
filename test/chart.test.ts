@@ -131,6 +131,7 @@ test.skipIf(!helm)("each repository gets a git-sync sidecar whose root the agent
     expect(sidecar.args).toContain(`--repo=https://github.com/${repo}`);
     expect(sidecar.args).toContain("--link=current");
     expect(sidecar.args).toContain("--root=/git");
+    expect(sidecar.args).toContain("--git-config=safe.directory:/git");
     expect(sidecar.volumeMounts).toContainEqual({ name: volume, mountPath: "/git" });
     expect(agent.volumeMounts).toContainEqual({ name: volume, mountPath, readOnly: true });
     expect(pod.volumes).toContainEqual({ name: volume, emptyDir: {} });

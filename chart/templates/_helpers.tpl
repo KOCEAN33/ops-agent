@@ -35,6 +35,9 @@ helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version }}
     - --repo=https://github.com/{{ .repo }}
     - --ref=main
     - --root=/git
+    # The emptyDir is owned by root with fsGroup's group, and git refuses a
+    # repository its user does not own.
+    - --git-config=safe.directory:/git
     - --link=current
     - --period={{ .root.Values.gitSync.period }}
     - --github-app-application-id={{ required "github.appId is required for a git-sync sidecar" .root.Values.github.appId }}
