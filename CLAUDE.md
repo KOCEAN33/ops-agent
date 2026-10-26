@@ -1,6 +1,6 @@
 # ops-agent
 
-The owner's in-cluster DevOps agent. It takes an Alertmanager webhook, investigates the alert, and proposes a fix in the alert's Discord thread or as a pull request on `homelab-platform`.
+The owner's in-cluster first responder. It takes an Alertmanager webhook, investigates the alert, takes a reversible stopgap when a service threatens the cluster, and files the root cause as an issue on `homelab-platform`. It talks to the owner in the alert's Discord thread.
 
 The design lives in `../homelab-platform/docs/plans/ops-agent.md`: its Chosen section holds the owner's decisions, its Open section the ones still due. Read it before changing shape here, and take an Open item to the owner before building it. Record a decision there, not in this repository.
 

@@ -1,26 +1,28 @@
 # ops-agent
 
-A DevOps agent that runs inside a homelab Kubernetes cluster and answers its alerts. When Alertmanager fires, the agent investigates, explains what it found in a Discord thread, and proposes a fix. When the fix is a manifest change, it opens a pull request on the cluster's GitOps repository. The owner stays in the loop: replying in the thread continues the investigation, and nothing changes in the cluster until the owner merges.
+A first responder that runs inside a homelab Kubernetes cluster and answers its alerts. When Alertmanager fires, the agent investigates with a fixed set of tools and reports in a Discord thread. When a service threatens the cluster, it takes a reversible stopgap, such as scaling that service to zero. It files the root cause as an issue on the cluster's GitOps repository, where a stronger agent picks up the fix.
 
-It fills the role of [HolmesGPT](https://github.com/HolmesGPT/holmesgpt), built for one cluster and one owner, with a conversation that lasts as long as the alert does.
+It protects, in order, data, then security, then service. It is an operator, not an engineer: unlike [HolmesGPT](https://github.com/HolmesGPT/holmesgpt), it stops at containment and hands the analysis off.
 
 ## Design
 
 - **Trigger**: Alertmanager sends every `warning` or `critical` alert group to the agent's webhook. Alert delivery to Discord does not go through the agent, so the agent being down loses no alert.
-- **Session**: one alert group, keyed by `alertname` and `namespace`, is one session and one Discord thread. The owner's reply in the thread resumes that session.
+- **Session**: one alert group, keyed by `alertname` and `namespace`, is one session, one Discord thread, and one issue. The owner's reply in the thread resumes that session.
 - **Tools**: each tool is a fixed function, never a shell.
   - Read Kubernetes objects through a ServiceAccount bound to the `view` ClusterRole, which excludes Secrets.
   - Query logs with LogQL against Loki and metrics with PromQL against Prometheus.
   - Read the GitOps repository at `main`.
-  - Open a pull request on that repository through a GitHub App scoped to it.
+  - Open or comment on an issue in that repository through a GitHub App scoped to it.
+  - Stopgaps: scale a workload to zero, suspend a CronJob, or restart a Pod.
+- **Stopgap autonomy**: the agent acts on its own only when its own metric queries show a cluster-wide threat, such as node pressure or shared storage near full. Every other stopgap waits for the owner's approval button in the thread.
 - **Models**: the [Vercel AI SDK](https://ai-sdk.dev) reaches Anthropic directly, OpenRouter, or any OpenAI-compatible endpoint, so the provider is a configuration choice.
 - **Memory**: incident history is kept in SQLite on the agent's volume. Operating instructions are markdown in a separate private repository, reloaded on each new commit.
 
 ## Safety
 
-- The agent changes the cluster only through a pull request the owner merges, and Argo CD applies it. The RBAC binding enforces this, not the prompt.
-- The pull request tool refuses any diff that touches the production database's manifests.
-- Log lines, alert annotations, and messages from anyone other than the owner are data. No tool runs a command taken from that text.
+- RBAC and an admission policy limit writes to the three stopgaps, in namespaces on an owner-set allowlist. Databases, backups, and the platform itself are never on it. The prompt enforces nothing.
+- Every stopgap keeps volumes and is undone by one reverse action, so the worst case of a wrong stop is downtime. The agent does not undo its own stopgap: the owner approves the undo.
+- Log lines, alert annotations, and messages from anyone other than the owner are data. No tool runs a command taken from that text, and the cluster-wide threat test reads only metrics the agent queried.
 - The agent's environment holds only model API keys and the GitHub App key.
 
 ## Status
