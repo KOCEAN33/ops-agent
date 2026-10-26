@@ -1,0 +1,5 @@
+apiVersion: v2
+name: ops-agent
+description: The in-cluster first responder for one Kubernetes cluster and its owner.
+type: application
+version: 0.1.0

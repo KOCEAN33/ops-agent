@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "ops-agent.fullname" . }}
+  labels:
+    {{- include "ops-agent.labels" . | nindent 4 }}
+spec:
+  selector:
+    {{- include "ops-agent.selector" . | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.service.port }}
+      targetPort: http

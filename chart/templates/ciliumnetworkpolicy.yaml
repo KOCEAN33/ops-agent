@@ -1,0 +1,52 @@
+{{- with .Values.ciliumEgress }}
+{{- if .enabled }}
+# The agent's own connections reach cluster DNS, the API server, the listed
+# in-cluster endpoints and the listed HTTPS hosts, and no other host.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: {{ include "ops-agent.fullname" $ }}-egress
+  labels:
+    {{- include "ops-agent.labels" $ | nindent 4 }}
+spec:
+  endpointSelector:
+    matchLabels:
+      {{- include "ops-agent.selector" $ | nindent 6 }}
+  egress:
+    # The DNS proxy learns the FQDN rules' addresses from these lookups.
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: {{ .dns.namespace }}
+            {{- range $k, $v := .dns.podLabels }}
+            {{ $k }}: {{ $v | quote }}
+            {{- end }}
+      toPorts:
+        - ports:
+            - port: "53"
+              protocol: ANY
+          rules:
+            dns:
+              - matchPattern: "*"
+    - toEntities: [kube-apiserver]
+    {{- range .inCluster }}
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: {{ .namespace }}
+            {{- range $k, $v := .podLabels }}
+            {{ $k }}: {{ $v | quote }}
+            {{- end }}
+      toPorts:
+        - ports:
+            {{- range .ports }}
+            - port: {{ . | quote }}
+              protocol: TCP
+            {{- end }}
+    {{- end }}
+    - toFQDNs:
+        {{- toYaml .fqdns | nindent 8 }}
+      toPorts:
+        - ports:
+            - port: "443"
+              protocol: TCP
+{{- end }}
+{{- end }}

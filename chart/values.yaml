@@ -1,0 +1,113 @@
+# Every value without a default is required, and `helm template` stops on a
+# missing one.
+
+image:
+  # Such as the registry's pull-through cache path for the GHCR image.
+  repository: ""
+  # A tag or a digest (sha256:...). Pin one, so a new image reaches the
+  # cluster only through a commit to the GitOps repository.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+# Anthropic model ID. src/config.ts holds its price, or set price below.
+model: claude-sonnet-5-5
+# USD per million tokens, all four or none. Overrides the built-in table.
+price: {}
+#   input: 2
+#   output: 10
+#   cacheRead: 0.1
+#   cacheWrite: 2.5
+
+turnCapUsd: ""
+monthlyCapUsd: ""
+
+# A Secret in the release namespace, such as one the cluster's secret store
+# syncs. The chart reads it and never creates it.
+secret:
+  name: ""
+  keys:
+    anthropicApiKey: ANTHROPIC_API_KEY
+    webhookToken: WEBHOOK_TOKEN
+    # Read only when discord is set.
+    discordBotToken: DISCORD_BOT_TOKEN
+    # The GitHub App's private key, PEM. Read only when github is set.
+    githubAppKey: GITHUB_APP_KEY
+
+# In-cluster read sources. Each left empty turns its tools off.
+prometheusUrl: ""
+lokiUrl: ""
+
+# Hosts whose links survive in Discord posts and issues.
+linkAllowlist: []
+
+# Both set turn the Discord bot on. Quote every ID: Helm reads a bare number as
+# a float, so the chart refuses one.
+discord:
+  channelId: ""
+  ownerId: ""
+
+# The GitHub App, IDs quoted. appId and gitopsRepo turn issues on. Each repository set
+# also gets a git-sync sidecar that keeps a clone current with the App's
+# contents read: the GitOps clone feeds the read tools, the instructions clone
+# the operating instructions.
+github:
+  appId: ""
+  # git-sync needs it to mint its own token.
+  installationId: ""
+  # owner/name
+  gitopsRepo: ""
+  instructionsRepo: ""
+
+gitSync:
+  image: registry.k8s.io/git-sync/git-sync:v4.8.0
+  period: 60s
+
+persistence:
+  # Holds the SQLite file: sessions, the turn queue, spend and the outboxes.
+  size: 1Gi
+  storageClass: ""
+
+service:
+  port: 8080
+
+# Ingress to the webhook is admitted from these pods alone. The webhook token
+# still holds without the policy.
+alertmanager:
+  namespaceSelector: {}
+  podSelector: {}
+
+# Egress through the CNI's FQDN rules. Off, egress is not limited.
+ciliumEgress:
+  enabled: false
+  # HTTPS hosts: the model API, Discord and GitHub. Discord's gateway resumes on
+  # regional hosts under discord.gg.
+  fqdns:
+    - matchName: api.anthropic.com
+    - matchName: discord.com
+    - matchPattern: "*.discord.gg"
+    - matchName: api.github.com
+    - matchName: github.com
+  # In-cluster endpoints: the PromQL endpoint and Loki. Each entry is a
+  # namespace, pod labels and ports.
+  inCluster: []
+  #  - namespace: monitoring
+  #    podLabels: { app.kubernetes.io/name: example }
+  #    ports: [9090]
+  dns:
+    namespace: kube-system
+    podLabels:
+      k8s-app: kube-dns
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 192Mi
+  limits:
+    memory: 512Mi
+
+gitSyncResources:
+  requests:
+    cpu: 10m
+    memory: 32Mi
+  limits:
+    memory: 128Mi

@@ -1,0 +1,149 @@
+import { expect, test } from "bun:test";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+const CHART = join(import.meta.dir, "..", "chart");
+const helm = Bun.which("helm");
+
+const example = {
+  image: { repository: "registry.example.com/ghcr/example/ops-agent", tag: "1.0.0" },
+  turnCapUsd: 1,
+  monthlyCapUsd: 40,
+  secret: { name: "ops-agent" },
+  prometheusUrl: "http://prometheus.example.svc:9090",
+  lokiUrl: "http://loki.example.svc:3100",
+  linkAllowlist: ["grafana.example.com"],
+  discord: { channelId: "100", ownerId: "200" },
+  github: { appId: "12345", installationId: "678", gitopsRepo: "example-owner/example-gitops", instructionsRepo: "example-owner/example-instructions" },
+  alertmanager: {
+    namespaceSelector: { matchLabels: { "kubernetes.io/metadata.name": "example-monitoring" } },
+    podSelector: { matchLabels: { "app.kubernetes.io/name": "alertmanager" } },
+  },
+  ciliumEgress: { enabled: true, inCluster: [{ namespace: "example-monitoring", podLabels: { app: "prometheus" }, ports: [9090] }] },
+};
+
+type Doc = { kind: string; metadata: { name: string }; [k: string]: any };
+
+// Renders the chart with values. Returns the documents, or the error text.
+function render(values: unknown): { docs: Doc[]; error: string } {
+  const file = join(mkdtempSync(join(tmpdir(), "ops-agent-chart-")), "values.json");
+  writeFileSync(file, JSON.stringify(values));
+  const r = Bun.spawnSync([helm!, "template", "t", CHART, "-f", file]);
+  const out = r.stdout.toString();
+  const docs = out
+    .split(/^---$/m)
+    .map((d) => Bun.YAML.parse(d) as Doc | null)
+    .filter((d): d is Doc => !!d);
+  return { docs, error: r.stderr.toString() };
+}
+
+const one = (docs: Doc[], kind: string, name?: string) => {
+  const found = docs.filter((d) => d.kind === kind && (!name || d.metadata.name === name));
+  expect(found).toHaveLength(1);
+  return found[0]!;
+};
+
+test.skipIf(!helm)("the chart lints", () => {
+  const file = join(mkdtempSync(join(tmpdir(), "ops-agent-chart-")), "values.json");
+  writeFileSync(file, JSON.stringify(example));
+  const r = Bun.spawnSync([helm!, "lint", "--strict", CHART, "-f", file]);
+  expect(r.stdout.toString() + r.stderr.toString()).toContain("0 chart(s) failed");
+});
+
+test.skipIf(!helm)("one replica runs, and the old pod stops before the new one starts", () => {
+  const d = one(render(example).docs, "Deployment");
+  expect(d.spec.replicas).toBe(1);
+  expect(d.spec.strategy).toEqual({ type: "Recreate" });
+});
+
+test.skipIf(!helm)("the ServiceAccount reads through view and a ClusterRole for the cluster kinds view leaves out", () => {
+  const { docs } = render(example);
+  const sa = one(docs, "ServiceAccount").metadata.name;
+  expect(one(docs, "Deployment").spec.template.spec.serviceAccountName).toBe(sa);
+  const bindings = docs.filter((d) => d.kind === "ClusterRoleBinding");
+  for (const b of bindings) expect(b.subjects).toEqual([{ kind: "ServiceAccount", name: sa, namespace: expect.any(String) }]);
+  expect(bindings.map((b) => b.roleRef.name).sort()).toEqual(["t-ops-agent-cluster-read", "view"]);
+  expect(one(docs, "ClusterRole").rules).toEqual([
+    { apiGroups: [""], resources: ["nodes", "persistentvolumes"], verbs: ["get", "list", "watch"] },
+    { apiGroups: ["storage.k8s.io"], resources: ["storageclasses"], verbs: ["get", "list", "watch"] },
+  ]);
+  expect(docs.filter((d) => d.kind === "Role" || d.kind === "RoleBinding")).toEqual([]);
+});
+
+test.skipIf(!helm)("ingress to the agent comes from Alertmanager alone", () => {
+  const p = one(render(example).docs, "NetworkPolicy");
+  expect(p.spec.policyTypes).toEqual(["Ingress"]);
+  expect(p.spec.ingress).toEqual([
+    {
+      from: [{ namespaceSelector: example.alertmanager.namespaceSelector, podSelector: example.alertmanager.podSelector }],
+      ports: [{ port: "http" }],
+    },
+  ]);
+});
+
+test.skipIf(!helm)("the chart refuses to render without an Alertmanager selector", () => {
+  const { alertmanager: _, ...rest } = example;
+  expect(render(rest).error).toContain("alertmanager");
+});
+
+test.skipIf(!helm)("every credential comes from the Secret and none from a plain value", () => {
+  const { docs } = render(example);
+  const pod = one(docs, "Deployment").spec.template.spec;
+  const env = Object.fromEntries(pod.containers[0].env.map((e: any) => [e.name, e]));
+  for (const name of ["ANTHROPIC_API_KEY", "WEBHOOK_TOKEN", "DISCORD_BOT_TOKEN", "GITHUB_APP_KEY"]) {
+    expect(env[name]).toEqual({ name, valueFrom: { secretKeyRef: { name: "ops-agent", key: name } } });
+  }
+  expect(docs.filter((d) => d.kind === "Secret")).toEqual([]);
+  // git-sync reads the same App key as a file from the Secret.
+  const keyVolume = pod.volumes.find((v: any) => v.secret);
+  expect(keyVolume.secret).toMatchObject({ secretName: "ops-agent", items: [{ key: "GITHUB_APP_KEY", path: "key.pem" }] });
+});
+
+test.skipIf(!helm)("egress reaches DNS, the API server, the listed endpoints and HTTPS hosts by name, and no wider range", () => {
+  const p = one(render(example).docs, "CiliumNetworkPolicy");
+  const rules = p.spec.egress as Record<string, unknown>[];
+  expect(rules.flatMap((r) => Object.keys(r).filter((k) => k !== "toPorts")).sort()).toEqual([
+    "toEndpoints",
+    "toEndpoints",
+    "toEntities",
+    "toFQDNs",
+  ]);
+  expect(rules.find((r) => r.toEntities)!.toEntities).toEqual(["kube-apiserver"]);
+  const fqdn = rules.find((r) => r.toFQDNs)!;
+  expect(fqdn.toPorts).toEqual([{ ports: [{ port: "443", protocol: "TCP" }] }]);
+});
+
+test.skipIf(!helm)("each repository gets a git-sync sidecar whose root the agent mounts whole", () => {
+  const pod = one(render(example).docs, "Deployment").spec.template.spec;
+  const agent = pod.containers[0];
+  const env = Object.fromEntries(agent.env.map((e: any) => [e.name, e.value]));
+  expect(env.GITOPS_DIR).toBe("/repos/gitops/current");
+  expect(env.INSTRUCTIONS_DIR).toBe("/repos/instructions/current");
+  for (const name of ["gitops", "instructions"]) {
+    const sidecar = pod.containers.find((c: any) => c.name === `git-sync-${name}`);
+    expect(sidecar.args).toContain("--link=current");
+    expect(sidecar.args).toContain("--root=/git");
+    expect(sidecar.volumeMounts).toContainEqual({ name, mountPath: "/git" });
+    expect(agent.volumeMounts).toContainEqual({ name, mountPath: `/repos/${name}`, readOnly: true });
+  }
+});
+
+test.skipIf(!helm)("an ID written as a YAML number fails the render instead of turning into a float", () => {
+  for (const over of [
+    { discord: { channelId: 123456789012345678, ownerId: "200" } },
+    { discord: { channelId: "100", ownerId: 223456789012345679 } },
+    { github: { ...example.github, appId: 1234567 } },
+    { github: { ...example.github, installationId: 87654321 } },
+  ]) {
+    const { docs, error } = render({ ...example, ...over });
+    expect(docs).toEqual([]);
+    expect(error).toContain("quote");
+  }
+});
+
+test.skipIf(!helm)("a half Discord configuration fails the render", () => {
+  const { docs, error } = render({ ...example, discord: { channelId: "100" } });
+  expect(docs).toEqual([]);
+  expect(error).toContain("discord.ownerId");
+});
