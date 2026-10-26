@@ -1,0 +1,36 @@
+{
+  "receiver": "healthchecks",
+  "status": "firing",
+  "alerts": [
+    {
+      "status": "firing",
+      "labels": {
+        "alertname": "Watchdog",
+        "cluster": "homelab",
+        "prometheus": "monitoring/kps",
+        "severity": "none"
+      },
+      "annotations": {
+        "summary": "An alert that should always be firing to certify that Alertmanager is working properly."
+      },
+      "startsAt": "2026-10-20T07:16:29.546Z",
+      "endsAt": "0001-01-01T00:00:00Z",
+      "generatorURL": "https://prometheus.example.com/graph?g0.expr=vector%281%29&g0.tab=1",
+      "fingerprint": "70d9e2d3ec5b158f"
+    }
+  ],
+  "groupLabels": { "alertname": "Watchdog" },
+  "commonLabels": {
+    "alertname": "Watchdog",
+    "cluster": "homelab",
+    "prometheus": "monitoring/kps",
+    "severity": "none"
+  },
+  "commonAnnotations": {
+    "summary": "An alert that should always be firing to certify that Alertmanager is working properly."
+  },
+  "externalURL": "https://alertmanager.example.com",
+  "version": "4",
+  "groupKey": "{}:{alertname=\"Watchdog\"}",
+  "truncatedAlerts": 0
+}

@@ -1,0 +1,42 @@
+{
+  "receiver": "warning",
+  "status": "firing",
+  "alerts": [
+    {
+      "status": "firing",
+      "labels": {
+        "alertname": "KubeJobFailed",
+        "cluster": "homelab",
+        "job_name": "gallery-dl-29870000",
+        "namespace": "gallery-dl",
+        "prometheus": "monitoring/kps",
+        "severity": "warning"
+      },
+      "annotations": {
+        "description": "Job gallery-dl/gallery-dl-29870000 failed to complete.",
+        "summary": "Job failed to complete."
+      },
+      "startsAt": "2026-10-26T03:00:00Z",
+      "endsAt": "0001-01-01T00:00:00Z",
+      "generatorURL": "https://prometheus.example.com/graph?g0.expr=kube_job_failed%7Bjob%3D%22kube-state-metrics%22%7D+%3E+0&g0.tab=1",
+      "fingerprint": "3f1c2a9b7d4e5f60"
+    }
+  ],
+  "groupLabels": { "alertname": "KubeJobFailed", "namespace": "gallery-dl" },
+  "commonLabels": {
+    "alertname": "KubeJobFailed",
+    "cluster": "homelab",
+    "job_name": "gallery-dl-29870000",
+    "namespace": "gallery-dl",
+    "prometheus": "monitoring/kps",
+    "severity": "warning"
+  },
+  "commonAnnotations": {
+    "description": "Job gallery-dl/gallery-dl-29870000 failed to complete.",
+    "summary": "Job failed to complete."
+  },
+  "externalURL": "https://alertmanager.example.com",
+  "version": "4",
+  "groupKey": "{}/{severity=\"warning\"}:{alertname=\"KubeJobFailed\", namespace=\"gallery-dl\"}",
+  "truncatedAlerts": 0
+}
