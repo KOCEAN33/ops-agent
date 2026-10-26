@@ -9,7 +9,7 @@ import {
   type ModelMessage,
 } from "ai";
 import type { Price } from "./config";
-import type { Store } from "./store";
+import type { Store, Turn } from "./store";
 import { turnTools, type ReadTool } from "./tools";
 
 const BASE_INSTRUCTIONS = `You are ops-agent, the first responder for a homelab Kubernetes cluster. You investigate an alert with the tools you are given, contain the incident with a reversible stopgap when a service threatens the cluster, and hand the root cause off to the owner as an issue. You do not fix root causes yourself.
@@ -36,6 +36,9 @@ export interface AgentDeps {
   now: () => Date;
   // Fixed for the process's life, so a session sees the same tools each turn.
   tools: Record<string, ReadTool>;
+  // Bounds one step: the model call, its retries and its tools. A stalled call
+  // would otherwise hold one of the queue's few turn slots until a restart.
+  stepTimeoutMs: number;
 }
 
 export function cost(u: LanguageModelUsage, p: Price): number {
@@ -68,12 +71,18 @@ function providerUsage(u: {
 // as the tool-use system prompt.
 const INPUT_ALLOWANCE_TOKENS = 4_000;
 
-class OverBudget extends Error {}
+class OverBudget extends Error {
+  constructor(readonly cap: "turn-cap" | "monthly-cap") {
+    super(cap);
+  }
+}
 
+// Runs one attempt of a turn. It ends the turn, with its messages, unless the
+// monthly cap refuses it before any step finishes ("monthly-cap") or it
+// throws. Either way the turn stays pending and runs again.
 export async function runTurn(
   d: AgentDeps,
-  sessionId: number,
-  text: string,
+  turn: Pick<Turn, "id" | "sessionId" | "text">,
 ): Promise<{ text: string } | { skipped: "monthly-cap" | "budget" }> {
   const month = d.now().toISOString().slice(0, 7);
   if (d.store.monthSpend(month) >= d.monthlyCapUsd) return { skipped: "monthly-cap" };
@@ -81,7 +90,6 @@ export async function runTurn(
   // Every call reserves its worst case against both caps before it runs and
   // settles to the reported cost after. Turns on other sessions run in
   // parallel, and the reservation is what keeps them under the monthly cap.
-  let turnSpent = 0;
   let lastWorst = 0;
   const model = wrapLanguageModel({
     model: d.model,
@@ -92,9 +100,8 @@ export async function runTurn(
         const outputTokens = params.maxOutputTokens ?? MAX_OUTPUT_TOKENS;
         const worst = (inputTokens * Math.max(d.price.input, d.price.cacheWrite) + outputTokens * d.price.output) / 1e6;
         lastWorst = worst;
-        if (turnSpent + worst > d.turnCapUsd || !d.store.reserve(month, worst, d.monthlyCapUsd)) {
-          throw new OverBudget();
-        }
+        const reserved = d.store.reserve(month, turn.id, worst, d.turnCapUsd, d.monthlyCapUsd);
+        if (reserved !== "ok") throw new OverBudget(reserved);
         let actual = worst;
         try {
           const result = await doGenerate();
@@ -107,20 +114,20 @@ export async function runTurn(
           if (APICallError.isInstance(e) && (e.statusCode ?? 0) >= 400) actual = 0;
           throw e;
         } finally {
-          turnSpent += actual;
-          d.store.addSpend(month, actual - worst);
+          d.store.settle(month, turn.id, actual - worst);
         }
       },
     },
   });
 
-  const user: ModelMessage = { role: "user", content: [{ type: "text", text }] };
+  const user: ModelMessage = { role: "user", content: [{ type: "text", text: turn.text }] };
   // The next prompt holds the last one plus the new step, so its worst case is
   // at least the last one's. Stopping here keeps the turn's messages without
   // a refused call. A call can still be refused when another session spends
   // the month in between, or a large tool result grows the next prompt.
   const overBudget = () =>
-    turnSpent + lastWorst > d.turnCapUsd || d.store.monthSpend(month) + lastWorst > d.monthlyCapUsd;
+    d.store.turnSpend(turn.id) + lastWorst > d.turnCapUsd ||
+    d.store.monthSpend(month) + lastWorst > d.monthlyCapUsd;
   const { tools, repeated } = turnTools(d.tools);
   // The steps that finished before the current one. A refused call keeps them,
   // since a tool they ran may have changed the cluster.
@@ -130,9 +137,10 @@ export async function runTurn(
     result = await generateText({
       model,
       instructions: [BASE_INSTRUCTIONS, await d.instructions()].filter(Boolean).join("\n\n"),
-      messages: [...d.store.messages(sessionId), user],
+      messages: [...d.store.messages(turn.sessionId), user],
       tools,
       maxOutputTokens: MAX_OUTPUT_TOKENS,
+      timeout: { stepMs: d.stepTimeoutMs },
       stopWhen: [isStepCount(MAX_STEPS), overBudget],
       prepareStep: ({ responseMessages }) => {
         finished = responseMessages;
@@ -141,14 +149,23 @@ export async function runTurn(
     });
   } catch (e) {
     // The SDK wraps an error thrown on a retry in a RetryError.
-    const refused = e instanceof OverBudget || (RetryError.isInstance(e) && e.lastError instanceof OverBudget);
-    if (!refused) throw e;
-    console.log(JSON.stringify({ msg: "turn refused by spend cap", sessionId, turnSpent }));
-    if (finished.length > 0) d.store.append(sessionId, [user, ...finished]);
+    const refused = e instanceof OverBudget ? e : RetryError.isInstance(e) ? e.lastError : null;
+    if (!(refused instanceof OverBudget)) throw e;
+    const turnSpent = d.store.turnSpend(turn.id);
+    // With no step finished, nothing the turn did is lost by running it again
+    // once the month has room.
+    if (refused.cap === "monthly-cap" && finished.length === 0) {
+      console.log(JSON.stringify({ msg: "turn deferred by monthly cap", sessionId: turn.sessionId, turnSpent }));
+      return { skipped: "monthly-cap" };
+    }
+    console.log(JSON.stringify({ msg: "turn refused by spend cap", sessionId: turn.sessionId, turnSpent }));
+    d.store.endTurn(turn.id, "budget", finished.length > 0 ? [user, ...finished] : []);
     return { skipped: "budget" };
   }
-  if (overBudget()) console.log(JSON.stringify({ msg: "turn stopped at spend cap", sessionId, turnSpent }));
-  d.store.append(sessionId, [user, ...result.responseMessages]);
+  if (overBudget()) {
+    console.log(JSON.stringify({ msg: "turn stopped at spend cap", sessionId: turn.sessionId, turnSpent: d.store.turnSpend(turn.id) }));
+  }
+  d.store.endTurn(turn.id, "done", [user, ...result.responseMessages]);
   return { text: result.text };
 }
 

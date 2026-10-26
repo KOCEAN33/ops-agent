@@ -1,8 +1,20 @@
 import { expect, test } from "bun:test";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { MockLanguageModelV4 } from "ai/test";
 import { APICallError, type LanguageModelUsage } from "ai";
 import { cost, MAX_OUTPUT_TOKENS, runTurn, type AgentDeps } from "../src/agent";
 import { Store } from "../src/store";
+import type { GroupKey } from "../src/alert";
+
+// Queues a turn on the group's session, as a notification with a new set of
+// firing alerts does.
+let fingerprint = 0;
+function notify(store: Store, key: GroupKey, text: string) {
+  const { sessionId, turnId } = store.noteFiring(key, [String(fingerprint++)], text);
+  return { id: turnId!, sessionId, text };
+}
 
 // USD per million tokens.
 const price = { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 };
@@ -60,6 +72,7 @@ function deps(m: MockLanguageModelV4, over: Partial<AgentDeps> = {}): AgentDeps 
     instructions: async () => "",
     now: () => new Date("2026-10-26T03:00:00Z"),
     tools: {},
+    stepTimeoutMs: 60_000,
     ...over,
   };
 }
@@ -67,10 +80,10 @@ function deps(m: MockLanguageModelV4, over: Partial<AgentDeps> = {}): AgentDeps 
 test("a later turn carries the session's earlier messages", async () => {
   const m = model((n) => `reply ${n}`);
   const d = deps(m);
-  const { sessionId } = d.store.noteFiring({ alertname: "KubeJobFailed", namespace: "example-app" }, ["a"]);
+  const key = { alertname: "KubeJobFailed", namespace: "example-app" };
 
-  await runTurn(d, sessionId, "first alert");
-  await runTurn(d, sessionId, "second alert");
+  await runTurn(d, notify(d.store, key, "first alert"));
+  await runTurn(d, notify(d.store, key, "second alert"));
 
   const prompt = m.doGenerateCalls[1]!.prompt;
   expect(prompt.filter((p) => p.role !== "system")).toEqual([
@@ -84,10 +97,10 @@ test("once the month's spend reaches the cap, no model call is made", async () =
   // One turn costs 1.0 * 3 + 0.5 * 15 = 10.5 USD, over a 10 USD monthly cap.
   const m = model(() => "ok", { noCache: 1_000_000, output: 500_000 });
   const d = deps(m, { monthlyCapUsd: 10, turnCapUsd: 20 });
-  const { sessionId } = d.store.noteFiring({ alertname: "NodeDiskPressure", namespace: null }, ["a"]);
+  const key = { alertname: "NodeDiskPressure", namespace: null };
 
-  expect(await runTurn(d, sessionId, "first")).toEqual({ text: "ok" });
-  expect(await runTurn(d, sessionId, "second")).toEqual({ skipped: "monthly-cap" });
+  expect(await runTurn(d, notify(d.store, key, "first"))).toEqual({ text: "ok" });
+  expect(await runTurn(d, notify(d.store, key, "second"))).toEqual({ skipped: "monthly-cap" });
   expect(m.doGenerateCalls).toHaveLength(1);
 });
 
@@ -115,33 +128,33 @@ test("turns on different sessions cannot together pass the monthly cap", async (
   const worstOutput = (MAX_OUTPUT_TOKENS * pricey.output) / 1e6;
   // Room for one call's worst case, not two.
   const d = deps(m, { price: pricey, monthlyCapUsd: worstOutput * 1.5, turnCapUsd: worstOutput * 10 });
-  const a = d.store.noteFiring({ alertname: "A", namespace: null }, ["a"]).sessionId;
-  const b = d.store.noteFiring({ alertname: "B", namespace: null }, ["b"]).sessionId;
+  const a = notify(d.store, { alertname: "A", namespace: null }, "first");
+  const b = notify(d.store, { alertname: "B", namespace: null }, "second");
 
-  const turns = Promise.all([runTurn(d, a, "first"), runTurn(d, b, "second")]);
+  const turns = Promise.all([runTurn(d, a), runTurn(d, b)]);
   await Bun.sleep(0);
   release();
   const results = await turns;
 
   expect(m.doGenerateCalls).toHaveLength(1);
-  expect(results).toContainEqual({ skipped: "budget" });
+  expect(results).toContainEqual({ skipped: "monthly-cap" });
 });
 
 test("a call whose worst case exceeds the turn cap is never made", async () => {
   const m = model(() => "ok");
   const worstOutput = (MAX_OUTPUT_TOKENS * pricey.output) / 1e6;
   const d = deps(m, { price: pricey, turnCapUsd: worstOutput / 2, monthlyCapUsd: 100 });
-  const { sessionId } = d.store.noteFiring({ alertname: "A", namespace: null }, ["a"]);
+  const key = { alertname: "A", namespace: null };
 
-  expect(await runTurn(d, sessionId, "alert")).toEqual({ skipped: "budget" });
+  expect(await runTurn(d, notify(d.store, key, "alert"))).toEqual({ skipped: "budget" });
   expect(m.doGenerateCalls).toHaveLength(0);
 });
 
 test("a model call is limited to MAX_OUTPUT_TOKENS", async () => {
   const m = model(() => "ok");
   const d = deps(m);
-  const { sessionId } = d.store.noteFiring({ alertname: "A", namespace: null }, ["a"]);
-  await runTurn(d, sessionId, "alert");
+  const key = { alertname: "A", namespace: null };
+  await runTurn(d, notify(d.store, key, "alert"));
   expect(m.doGenerateCalls[0]!.maxOutputTokens).toBe(MAX_OUTPUT_TOKENS);
 });
 
@@ -160,11 +173,11 @@ test("a call the API answered with 200 keeps its reservation when its body fails
   const worstOutput = (MAX_OUTPUT_TOKENS * pricey.output) / 1e6;
   const store = new Store(":memory:");
   const caps = { price: pricey, monthlyCapUsd: worstOutput * 1.5, turnCapUsd: worstOutput * 10, store };
-  const { sessionId } = store.noteFiring({ alertname: "A", namespace: null }, ["a"]);
+  const key = { alertname: "A", namespace: null };
 
-  await expect(runTurn(deps(failing(() => apiError(200)), caps), sessionId, "first")).rejects.toThrow();
+  await expect(runTurn(deps(failing(() => apiError(200)), caps), notify(store, key, "first"))).rejects.toThrow();
   const next = model(() => "ok");
-  expect(await runTurn(deps(next, caps), sessionId, "second")).toEqual({ skipped: "budget" });
+  expect(await runTurn(deps(next, caps), notify(store, key, "second"))).toEqual({ skipped: "monthly-cap" });
   expect(next.doGenerateCalls).toHaveLength(0);
 });
 
@@ -172,13 +185,13 @@ test("a call the API refused with an error status is not charged", async () => {
   const worstOutput = (MAX_OUTPUT_TOKENS * pricey.output) / 1e6;
   const store = new Store(":memory:");
   const caps = { price: pricey, monthlyCapUsd: worstOutput * 1.5, turnCapUsd: worstOutput * 10, store };
-  const { sessionId } = store.noteFiring({ alertname: "A", namespace: null }, ["a"]);
+  const key = { alertname: "A", namespace: null };
 
-  await expect(runTurn(deps(failing(() => apiError(400)), caps), sessionId, "first")).rejects.toThrow();
-  expect(await runTurn(deps(model(() => "ok"), caps), sessionId, "second")).toEqual({ text: "ok" });
+  await expect(runTurn(deps(failing(() => apiError(400)), caps), notify(store, key, "first"))).rejects.toThrow();
+  expect(await runTurn(deps(model(() => "ok"), caps), notify(store, key, "second"))).toEqual({ text: "ok" });
 });
 
-test("a reservation refused on a retry still reports the budget", async () => {
+test("a reservation refused on a retry is reported, not thrown", async () => {
   const store = new Store(":memory:");
   const d = deps(
     failing(() => {
@@ -188,17 +201,43 @@ test("a reservation refused on a retry still reports the budget", async () => {
     }),
     { store },
   );
-  const { sessionId } = store.noteFiring({ alertname: "A", namespace: null }, ["a"]);
-  expect(await runTurn(d, sessionId, "alert")).toEqual({ skipped: "budget" });
+  const key = { alertname: "A", namespace: null };
+  expect(await runTurn(d, notify(store, key, "alert"))).toEqual({ skipped: "monthly-cap" });
 }, 15_000);
 
 test("the monthly cap resets when the month turns", async () => {
   const m = model(() => "ok", { noCache: 1_000_000, output: 500_000 });
   let now = new Date("2026-10-31T23:00:00Z");
   const d = deps(m, { monthlyCapUsd: 10, turnCapUsd: 20, now: () => now });
-  const { sessionId } = d.store.noteFiring({ alertname: "NodeDiskPressure", namespace: null }, ["a"]);
+  const key = { alertname: "NodeDiskPressure", namespace: null };
 
-  await runTurn(d, sessionId, "october");
+  await runTurn(d, notify(d.store, key, "october"));
   now = new Date("2026-11-01T01:00:00Z");
-  expect(await runTurn(d, sessionId, "november")).toEqual({ text: "ok" });
+  expect(await runTurn(d, notify(d.store, key, "november"))).toEqual({ text: "ok" });
+});
+
+test("attempts of one turn share its turn cap, across a restart", async () => {
+  const worstOutput = (MAX_OUTPUT_TOKENS * pricey.output) / 1e6;
+  const file = join(mkdtempSync(join(tmpdir(), "ops-agent-")), "db.sqlite");
+  // Room for one call's worst case, not two.
+  const caps = { price: pricey, turnCapUsd: worstOutput * 1.5, monthlyCapUsd: 100 };
+  const before = new Store(file);
+  const turn = notify(before, { alertname: "A", namespace: null }, "alert");
+
+  // A failure that is not an API error status keeps the call's reservation.
+  await expect(runTurn(deps(failing(() => new Error("socket closed")), { ...caps, store: before }), turn)).rejects.toThrow();
+
+  const next = model(() => "ok");
+  expect(await runTurn(deps(next, { ...caps, store: new Store(file) }), turn)).toEqual({ skipped: "budget" });
+  expect(next.doGenerateCalls).toHaveLength(0);
+});
+
+test("a model call that stalls fails the attempt instead of holding a turn slot", async () => {
+  const m = new MockLanguageModelV4({
+    doGenerate: ({ abortSignal }) =>
+      new Promise((_, reject) => abortSignal?.addEventListener("abort", () => reject(abortSignal.reason))),
+  });
+  const d = deps(m, { stepTimeoutMs: 50 });
+  await expect(runTurn(d, notify(d.store, { alertname: "A", namespace: null }, "alert"))).rejects.toThrow();
+  expect(d.store.pending()).toHaveLength(1);
 });
