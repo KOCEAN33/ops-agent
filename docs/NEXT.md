@@ -12,4 +12,5 @@ A deployed first responder per `docs/design.md`. Step 1 is built and has run aga
 
 ## Pointers
 
+- Local `main` holds design commits not yet on `origin/main`. The owner pushes them: an agent's `git push` is blocked by the permission classifier. Check `git status -sb` before building on the remote.
 - A real call on Claude Sonnet 5.5 costs under a cent: `bun start`, then POST `test/payloads/kube-job-failed.json` with the webhook bearer token.
