@@ -63,6 +63,9 @@ const COMPACTION = { maskBytes: 50_000, summaryBytes: 100_000 };
 // Every producer of a post, a restart included, is covered by one poll.
 const OUTBOX_POLL_MS = 2_000;
 
+const INSTRUCTIONS_MISSING =
+  "The operating instructions clone is missing, so turns run on the base instructions alone. Check the instructions git-sync sidecar's log.";
+
 // GitHub allows 5,000 requests an hour to an installation, and a failing write
 // is retried on each poll.
 const ISSUE_POLL_MS = 10_000;
@@ -94,7 +97,16 @@ if (import.meta.main) {
     turnCapUsd: config.turnCapUsd,
     monthlyCapUsd: config.monthlyCapUsd,
     store,
-    instructions: async () => (config.instructionsDir ? readInstructions(config.instructionsDir) : ""),
+    instructions: async () => {
+      if (!config.instructionsDir) return "";
+      const text = await readInstructions(config.instructionsDir);
+      if (text !== null) return text;
+      // A missing clone would otherwise fail every turn. The turn runs on the
+      // base instructions, and the owner hears of it once a day.
+      console.error(JSON.stringify({ msg: "instructions clone missing", dir: config.instructionsDir }));
+      store.noticeOnce(`instructions-missing ${now().toISOString().slice(0, 10)}`, INSTRUCTIONS_MISSING);
+      return "";
+    },
     now,
     tools: await readTools(config, now),
     stepTimeoutMs: STEP_TIMEOUT_MS,

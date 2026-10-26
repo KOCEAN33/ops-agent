@@ -8,6 +8,7 @@ import {
   type LanguageModelUsage,
   type ModelMessage,
 } from "ai";
+import { existsSync } from "node:fs";
 import { history, SUMMARY_INSTRUCTIONS, type Compaction } from "./compact";
 import type { Price } from "./config";
 import { handoff } from "./issues";
@@ -197,8 +198,10 @@ export async function runTurn(
 }
 
 // Every markdown file in the operating instructions clone except its README,
-// read on each turn so a new commit applies without a restart.
-export async function readInstructions(dir: string): Promise<string> {
+// read on each turn so a new commit applies without a restart. Null while the
+// clone is missing, such as before git-sync's first sync.
+export async function readInstructions(dir: string): Promise<string | null> {
+  if (!existsSync(dir)) return null;
   const files = [...new Bun.Glob("**/*.md").scanSync(dir)].filter((f) => f !== "README.md").sort();
   const texts = await Promise.all(files.map((f) => Bun.file(`${dir}/${f}`).text()));
   return texts.join("\n\n");

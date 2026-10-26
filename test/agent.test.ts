@@ -1,10 +1,10 @@
 import { expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MockLanguageModelV4 } from "ai/test";
 import { APICallError, type LanguageModelUsage } from "ai";
-import { cost, MAX_OUTPUT_TOKENS, runTurn, type AgentDeps } from "../src/agent";
+import { cost, MAX_OUTPUT_TOKENS, readInstructions, runTurn, type AgentDeps } from "../src/agent";
 import { Store } from "../src/store";
 import type { GroupKey } from "../src/alert";
 
@@ -257,4 +257,15 @@ test("a turn ended by its spend cap still tells the owner", async () => {
   const turn = notify(d.store, { alertname: "A", namespace: null }, "alert");
   await runTurn(d, turn);
   expect(d.store.nextPost()?.text).toContain("spend");
+});
+
+test("instructions are every markdown file but the README, and a missing clone reads as null", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "ops-agent-instructions-"));
+  mkdirSync(join(dir, "runbooks"));
+  writeFileSync(join(dir, "README.md"), "readme");
+  writeFileSync(join(dir, "a.md"), "first");
+  writeFileSync(join(dir, "runbooks", "b.md"), "second");
+  expect(await readInstructions(dir)).toBe("first\n\nsecond");
+  // git-sync creates its link only after the first sync.
+  expect(await readInstructions(join(dir, "current"))).toBeNull();
 });
