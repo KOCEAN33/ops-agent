@@ -10,6 +10,7 @@ import {
 } from "ai";
 import { history, SUMMARY_INSTRUCTIONS, type Compaction } from "./compact";
 import type { Price } from "./config";
+import { handoff } from "./issues";
 import type { Store, Turn } from "./store";
 import { turnTools, type ReadTool } from "./tools";
 
@@ -182,13 +183,16 @@ export async function runTurn(
       return { skipped: "monthly-cap" };
     }
     console.log(JSON.stringify({ msg: "turn refused by spend cap", sessionId: turn.sessionId, turnSpent }));
-    d.store.endTurn(turn.id, "budget", finished.length > 0 ? [user, ...finished] : [], STOPPED);
+    const messages = finished.length > 0 ? [user, ...finished] : [];
+    d.store.endTurn(turn.id, "budget", messages, STOPPED, messages.length > 0 ? handoff(turn.text, messages, STOPPED) : undefined);
     return { skipped: "budget" };
   }
   if (overBudget()) {
     console.log(JSON.stringify({ msg: "turn stopped at spend cap", sessionId: turn.sessionId, turnSpent: d.store.turnSpend(turn.id) }));
   }
-  d.store.endTurn(turn.id, "done", [user, ...result.responseMessages], result.text || STOPPED);
+  const messages = [user, ...result.responseMessages];
+  const answer = result.text || STOPPED;
+  d.store.endTurn(turn.id, "done", messages, answer, handoff(turn.text, messages, answer));
   return { text: result.text };
 }
 

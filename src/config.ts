@@ -22,7 +22,9 @@ export interface Config {
   gitopsDir: string | null;
   // Off when unset, as for a local run, and posts wait in the store.
   discord: { token: string; channelId: string; ownerId: string } | null;
-  // Hosts whose links survive in Discord posts.
+  // Off when unset, and hand-offs wait in the store.
+  github: { appId: string; key: string; repo: string } | null;
+  // Hosts whose links survive in Discord posts and issues.
   linkHosts: Set<string>;
 }
 
@@ -94,6 +96,16 @@ function discord(env: Env): Config["discord"] {
   };
 }
 
+const GITHUB_VARS = ["GITHUB_APP_ID", "GITHUB_APP_KEY", "GITOPS_REPO"];
+
+// Any of them set means all three, as for Discord.
+function github(env: Env): Config["github"] {
+  if (!GITHUB_VARS.some((n) => env[n])) return null;
+  const repo = required(env, "GITOPS_REPO");
+  if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) throw new Error("GITOPS_REPO is not owner/name");
+  return { appId: required(env, "GITHUB_APP_ID"), key: required(env, "GITHUB_APP_KEY"), repo };
+}
+
 export function loadConfig(env: Env = process.env): Config {
   // @ai-sdk/anthropic reads the key itself. Checking it here fails the start
   // instead of the first alert.
@@ -113,6 +125,7 @@ export function loadConfig(env: Env = process.env): Config {
     lokiUrl: url(env.LOKI_URL),
     gitopsDir: env.GITOPS_DIR || null,
     discord: discord(env),
+    github: github(env),
     linkHosts: new Set(
       (env.LINK_ALLOWLIST ?? "")
         .split(",")

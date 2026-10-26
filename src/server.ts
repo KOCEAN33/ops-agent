@@ -5,6 +5,7 @@ import { parseWebhook } from "./alert";
 import { connect, onMessage, Outbox } from "./discord";
 import { loadConfig, type Config } from "./config";
 import { gitopsTools } from "./gitops";
+import { githubApi, IssueQueue } from "./issues";
 import { kubeTools } from "./kube";
 import { lokiTools, promTools } from "./query";
 import { TurnQueue } from "./queue";
@@ -62,6 +63,10 @@ const COMPACTION = { maskBytes: 50_000, summaryBytes: 100_000 };
 // Every producer of a post, a restart included, is covered by one poll.
 const OUTBOX_POLL_MS = 2_000;
 
+// GitHub allows 5,000 requests an hour to an installation, and a failing write
+// is retried on each poll.
+const ISSUE_POLL_MS = 10_000;
+
 const SERVICE_ACCOUNT = "/var/run/secrets/kubernetes.io/serviceaccount";
 
 async function readTools(c: Config, now: () => Date): Promise<Record<string, ReadTool>> {
@@ -115,6 +120,16 @@ if (import.meta.main) {
     setInterval(() => void outbox.flush(), OUTBOX_POLL_MS);
   } else {
     console.log(JSON.stringify({ msg: "discord off: posts wait in the store" }));
+  }
+
+  const g = config.github;
+  if (g) {
+    // A key that does not parse stops the start here.
+    const api = githubApi({ apiUrl: "https://api.github.com", ...g, now });
+    const issues = new IssueQueue({ store, api, linkHosts: config.linkHosts });
+    setInterval(() => void issues.flush(), ISSUE_POLL_MS);
+  } else {
+    console.log(JSON.stringify({ msg: "issues off: hand-offs wait in the store" }));
   }
 
   const server = Bun.serve({

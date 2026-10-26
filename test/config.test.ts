@@ -73,6 +73,23 @@ test("a partial Discord configuration fails at start", () => {
   expect(() => loadConfig({ ...base, MODEL: "claude-sonnet-5-5", ...partial })).toThrow(/DISCORD_OWNER_ID/);
 });
 
+const githubVars = { GITHUB_APP_ID: "12345", GITHUB_APP_KEY: "pem", GITOPS_REPO: "example-owner/example-repo" };
+
+test("issues are off without the GitHub variables and on with all three", () => {
+  expect(loadConfig({ ...base, MODEL: "claude-sonnet-5-5" }).github).toBeNull();
+  expect(loadConfig({ ...base, MODEL: "claude-sonnet-5-5", ...githubVars }).github).toEqual({
+    appId: "12345",
+    key: "pem",
+    repo: "example-owner/example-repo",
+  });
+});
+
+test("a partial GitHub configuration or a malformed repository fails at start", () => {
+  const { GITHUB_APP_KEY: _, ...partial } = githubVars;
+  expect(() => loadConfig({ ...base, MODEL: "claude-sonnet-5-5", ...partial })).toThrow(/GITHUB_APP_KEY/);
+  expect(() => loadConfig({ ...base, MODEL: "claude-sonnet-5-5", ...githubVars, GITOPS_REPO: "example-repo" })).toThrow(/GITOPS_REPO/);
+});
+
 test("LINK_ALLOWLIST lists hosts, case and spaces ignored", () => {
   const c = loadConfig({ ...base, MODEL: "claude-sonnet-5-5", LINK_ALLOWLIST: " Grafana.example.com, github.com ," });
   expect([...c.linkHosts]).toEqual(["grafana.example.com", "github.com"]);

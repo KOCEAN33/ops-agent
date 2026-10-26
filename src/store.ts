@@ -1,6 +1,7 @@
 import { Database } from "bun:sqlite";
 import type { ModelMessage } from "ai";
 import type { GroupKey } from "./alert";
+import type { Handoff } from "./issues";
 
 export interface Turn {
   id: number;
@@ -22,6 +23,15 @@ export interface Post {
   text: string;
   // Messages of the post already sent, so a retry resumes after them.
   sentChunks: number;
+}
+
+// A hand-off waiting for GitHub.
+export interface IssueWrite {
+  id: number;
+  sessionId: number;
+  handoff: Handoff;
+  // An open was sent before, so its issue may exist.
+  tried: boolean;
 }
 
 export interface StoredMessage {
@@ -78,6 +88,20 @@ export class Store {
     )`);
     this.db.run(`CREATE TABLE IF NOT EXISTS notices (
       key TEXT PRIMARY KEY
+    )`);
+    // The marker goes into the session's issue, so a retry after a lost
+    // response finds the issue instead of opening another.
+    this.db.run(`CREATE TABLE IF NOT EXISTS issues (
+      session_id INTEGER PRIMARY KEY REFERENCES sessions(id),
+      marker TEXT NOT NULL,
+      number INTEGER
+    )`);
+    this.db.run(`CREATE TABLE IF NOT EXISTS issue_writes (
+      id INTEGER PRIMARY KEY,
+      session_id INTEGER NOT NULL REFERENCES sessions(id),
+      handoff TEXT NOT NULL,
+      tried INTEGER NOT NULL DEFAULT 0,
+      state TEXT
     )`);
     // A summary covers the session's messages up to through_id. The messages
     // stay, so a later change of threshold can pick an older summary or none.
@@ -164,14 +188,22 @@ export class Store {
     this.db.query("UPDATE turns SET attempts = attempts - 1, next_at = ? WHERE id = ?").run(nextAt, turnId);
   }
 
-  // Appends the turn's messages, queues its post to the owner and ends it in
-  // one transaction, so a turn either ran and left both or stays pending and
-  // runs again.
-  endTurn(turnId: number, end: TurnEnd, messages: ModelMessage[], post: string) {
+  // Appends the turn's messages, queues its post to the owner and its hand-off
+  // to the issue, and ends it in one transaction, so a turn either ran and left
+  // all three or stays pending and runs again.
+  endTurn(turnId: number, end: TurnEnd, messages: ModelMessage[], post: string, handoff?: Handoff) {
     const insert = this.db.query("INSERT INTO messages (session_id, message) SELECT session_id, ? FROM turns WHERE id = ?");
     this.db.transaction(() => {
       for (const m of messages) insert.run(JSON.stringify(m), turnId);
       this.db.query("INSERT INTO posts (session_id, text) SELECT session_id, ? FROM turns WHERE id = ?").run(post, turnId);
+      if (handoff) {
+        this.db
+          .query("INSERT OR IGNORE INTO issues (session_id, marker) SELECT session_id, ? FROM turns WHERE id = ?")
+          .run(crypto.randomUUID(), turnId);
+        this.db
+          .query("INSERT INTO issue_writes (session_id, handoff) SELECT session_id, ? FROM turns WHERE id = ?")
+          .run(JSON.stringify(handoff), turnId);
+      }
       this.db.query("UPDATE turns SET ended = ? WHERE id = ?").run(end, turnId);
     })();
   }
@@ -204,6 +236,38 @@ export class Store {
   // A post Discord refused would otherwise hold back every post after it.
   postDropped(postId: number) {
     this.db.query("UPDATE posts SET state = 'dropped' WHERE id = ?").run(postId);
+  }
+
+  // The oldest hand-off not yet written or dropped.
+  nextIssueWrite(): IssueWrite | null {
+    const row = this.db
+      .query<{ id: number; sessionId: number; handoff: string; tried: number }, []>(
+        "SELECT id, session_id AS sessionId, handoff, tried FROM issue_writes WHERE state IS NULL ORDER BY id LIMIT 1",
+      )
+      .get();
+    return row && { ...row, handoff: JSON.parse(row.handoff), tried: row.tried === 1 };
+  }
+
+  issueWriteTried(writeId: number) {
+    this.db.query("UPDATE issue_writes SET tried = 1 WHERE id = ?").run(writeId);
+  }
+
+  issueWriteEnded(writeId: number, state: "sent" | "dropped") {
+    this.db.query("UPDATE issue_writes SET state = ? WHERE id = ?").run(state, writeId);
+  }
+
+  // Exists for every session with a queued write.
+  issue(sessionId: number): { marker: string; number: number | null } {
+    return this.db.query<{ marker: string; number: number | null }, [number]>("SELECT marker, number FROM issues WHERE session_id = ?").get(sessionId)!;
+  }
+
+  setIssue(sessionId: number, number: number) {
+    this.db.query("UPDATE issues SET number = ? WHERE session_id = ?").run(number, sessionId);
+  }
+
+  // The issue is gone, so the next write opens a new one.
+  forgetIssue(sessionId: number) {
+    this.db.query("UPDATE issues SET number = NULL WHERE session_id = ?").run(sessionId);
   }
 
   // The session's alert group, which names its thread.
