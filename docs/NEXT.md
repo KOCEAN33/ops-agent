@@ -10,7 +10,7 @@ A deployed first responder per `docs/design.md`. Built and running in the cluste
 2. **Container logs tool.** The agent reads pods and events but no container log, so on the first live run it guessed a crash cause from events alone. Add a read tool for a container's current and previous log, tail-capped, redacted like other tool output. ClusterRole `view` already grants `pods/log`. Record it under Tools in `docs/design.md` before building, since log text is stranger text. Done when a turn reads a crashed container's previous log.
 3. **Typing indicator.** The owner sees nothing in the thread while a turn runs. Send Discord's typing indicator to the session's thread every 8 seconds from the turn's start until its post is queued, since one call lasts 10 seconds. A failed typing call is ignored. Done when a reply in a thread shows the bot typing until the answer posts.
 4. **Metrics.** Build `/metrics` per Metrics in `docs/design.md`, the chart's PodMonitor and the NetworkPolicy rule for the scraper. It changes a boundary, so the `coding-review` pass follows the commit. Done when Grafana shows a test alert's turn spend.
-5. **SQLite durability.** Take the Open item in `docs/design.md` to the owner, then build what they choose. Due before the stopgap tools.
+5. **SQLite durability.** Build the Litestream sidecar and restore per SQLite durability in `docs/design.md`. The owner makes the R2 bucket and a token scoped to it and adds both to the secret store. It changes the credentials and egress, so the `coding-review` pass follows the commit. Done when a pod started on an empty volume restores the file. Due before the stopgap tools.
 
 ## Pointers
 
