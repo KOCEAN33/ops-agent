@@ -22,6 +22,7 @@ ops-agent is the first responder for one Kubernetes cluster and its one owner. C
 - **Image**: a GitHub-hosted runner builds it and pushes to GHCR, and the cluster pulls it through its registry's pull-through cache. Rejected: an in-cluster runner, because a public repository's pull request workflows would run inside the cluster network.
 - **Spend guard**: a per-turn cap and a monthly cap in USD. A turn is the agent's answer to one notification or one owner reply. The cap is per turn, not per session, because a session lives as long as its alert group recurs, so a lifetime cap would mute the group for good. A repeat notification whose firing alerts are unchanged starts no turn. At the monthly cap the agent stops calling models until the month turns (UTC) and says so once in Discord, while alerts still reach Discord directly. The monthly cap stays under the owner's Anthropic credit.
 - **Durable turns in SQLite**: a turn survives a restart or a failed model call, so a change in an alert group is never dropped. The queue lives in the same SQLite file as the sessions and the spend. Rejected: the cluster's shared PostgreSQL, because the agent would fail with the database it guards.
+- **Metrics: Prometheus scrape**: the agent serves `/metrics` on its own port for the cluster's Prometheus: spend per turn and for the month, turns by how they ended, turn duration, tokens, and tool calls. Grafana shows them, and an alert rule can warn as the month's spend nears its cap. The history outlives the SQLite file, though the caps still read SQLite alone. The NetworkPolicy then admits the Prometheus scraper to the metrics port, which serves no webhook. Not built yet. Rejected: spend in the turn's log line read through LogQL, because an alert on the month's running total would recompute it from logs.
 
 ## Shape
 
@@ -57,4 +58,4 @@ ops-agent is the first responder for one Kubernetes cluster and its one owner. C
 
 ## Open
 
-- None.
+- **SQLite durability**: the file sits on a mirrored, `Retain` volume with no snapshot or backup, so a corrupt file, a deleted PV or a lost pool loses it. The loss resets the month's spend, which lets the agent spend up to another monthly cap, drops queued turns, posts and hand-offs, and orphans each session's issue, so a refire opens a duplicate. The candidate is continuous replication of the file to S3-compatible storage with a restore on start, such as a Litestream sidecar. It adds a credential, a storage endpoint to egress, and a sidecar to the chart. Due before the stopgap tools, since the Write record and approvals live in the same file. Until then, a spend limit in the Anthropic console bounds the reset's cost.
