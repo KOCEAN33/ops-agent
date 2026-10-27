@@ -1,4 +1,5 @@
 import { Database } from "bun:sqlite";
+import { existsSync } from "node:fs";
 import type { ModelMessage } from "ai";
 import type { GroupKey } from "./alert";
 import type { Handoff } from "./owner/issues";
@@ -48,75 +49,83 @@ export class Store {
   private db: Database;
 
   constructor(path: string) {
+    // A file missing here is one no restore filled. It waits for the spend
+    // seed from the first transaction on, so a start cut before the seed runs
+    // still seeds on the next one.
+    const fresh = path !== ":memory:" && !existsSync(path);
     this.db = new Database(path, { create: true, strict: true });
     // Litestream replicates the WAL, and takes a short write lock while it
     // checkpoints, so a write waits for it instead of failing.
     this.db.run("PRAGMA busy_timeout = 5000");
     this.db.run("PRAGMA journal_mode = WAL");
-    this.db.run(`CREATE TABLE IF NOT EXISTS sessions (
-      id INTEGER PRIMARY KEY,
-      group_key TEXT NOT NULL UNIQUE,
-      firing TEXT NOT NULL
-    )`);
-    this.db.run(`CREATE TABLE IF NOT EXISTS messages (
-      id INTEGER PRIMARY KEY,
-      session_id INTEGER NOT NULL REFERENCES sessions(id),
-      message TEXT NOT NULL
-    )`);
-    this.db.run(`CREATE TABLE IF NOT EXISTS spend (
-      month TEXT PRIMARY KEY,
-      usd REAL NOT NULL
-    )`);
-    this.db.run(`CREATE TABLE IF NOT EXISTS turns (
-      id INTEGER PRIMARY KEY,
-      session_id INTEGER NOT NULL REFERENCES sessions(id),
-      text TEXT NOT NULL,
-      attempts INTEGER NOT NULL DEFAULT 0,
-      next_at INTEGER NOT NULL DEFAULT 0,
-      spent_usd REAL NOT NULL DEFAULT 0,
-      ended TEXT
-    )`);
-    // The starter message is recorded before its thread opens, so a retry
-    // opens the thread on it instead of posting another.
-    this.db.run(`CREATE TABLE IF NOT EXISTS threads (
-      session_id INTEGER PRIMARY KEY REFERENCES sessions(id),
-      starter_id TEXT NOT NULL,
-      thread_id TEXT UNIQUE
-    )`);
-    this.db.run(`CREATE TABLE IF NOT EXISTS posts (
-      id INTEGER PRIMARY KEY,
-      session_id INTEGER REFERENCES sessions(id),
-      text TEXT NOT NULL,
-      sent_chunks INTEGER NOT NULL DEFAULT 0,
-      state TEXT
-    )`);
-    this.db.run(`CREATE TABLE IF NOT EXISTS notices (
-      key TEXT PRIMARY KEY
-    )`);
-    // The marker goes into the session's issue, so a retry after a lost
-    // response finds the issue instead of opening another. repo, owner/name,
-    // is fixed by the session's first write and kept for the session's life.
-    this.db.run(`CREATE TABLE IF NOT EXISTS issues (
-      session_id INTEGER PRIMARY KEY REFERENCES sessions(id),
-      marker TEXT NOT NULL,
-      number INTEGER,
-      repo TEXT
-    )`);
-    this.db.run(`CREATE TABLE IF NOT EXISTS issue_writes (
-      id INTEGER PRIMARY KEY,
-      session_id INTEGER NOT NULL REFERENCES sessions(id),
-      handoff TEXT NOT NULL,
-      tried INTEGER NOT NULL DEFAULT 0,
-      state TEXT
-    )`);
-    // A summary covers the session's messages up to through_id. The messages
-    // stay, so a later change of threshold can pick an older summary or none.
-    this.db.run(`CREATE TABLE IF NOT EXISTS summaries (
-      id INTEGER PRIMARY KEY,
-      session_id INTEGER NOT NULL REFERENCES sessions(id),
-      through_id INTEGER NOT NULL,
-      text TEXT NOT NULL
-    )`);
+    this.db.transaction(() => {
+      this.db.run(`CREATE TABLE IF NOT EXISTS sessions (
+        id INTEGER PRIMARY KEY,
+        group_key TEXT NOT NULL UNIQUE,
+        firing TEXT NOT NULL
+      )`);
+      this.db.run(`CREATE TABLE IF NOT EXISTS messages (
+        id INTEGER PRIMARY KEY,
+        session_id INTEGER NOT NULL REFERENCES sessions(id),
+        message TEXT NOT NULL
+      )`);
+      this.db.run(`CREATE TABLE IF NOT EXISTS spend (
+        month TEXT PRIMARY KEY,
+        usd REAL NOT NULL
+      )`);
+      this.db.run(`CREATE TABLE IF NOT EXISTS turns (
+        id INTEGER PRIMARY KEY,
+        session_id INTEGER NOT NULL REFERENCES sessions(id),
+        text TEXT NOT NULL,
+        attempts INTEGER NOT NULL DEFAULT 0,
+        next_at INTEGER NOT NULL DEFAULT 0,
+        spent_usd REAL NOT NULL DEFAULT 0,
+        ended TEXT
+      )`);
+      // The starter message is recorded before its thread opens, so a retry
+      // opens the thread on it instead of posting another.
+      this.db.run(`CREATE TABLE IF NOT EXISTS threads (
+        session_id INTEGER PRIMARY KEY REFERENCES sessions(id),
+        starter_id TEXT NOT NULL,
+        thread_id TEXT UNIQUE
+      )`);
+      this.db.run(`CREATE TABLE IF NOT EXISTS posts (
+        id INTEGER PRIMARY KEY,
+        session_id INTEGER REFERENCES sessions(id),
+        text TEXT NOT NULL,
+        sent_chunks INTEGER NOT NULL DEFAULT 0,
+        state TEXT
+      )`);
+      this.db.run(`CREATE TABLE IF NOT EXISTS notices (
+        key TEXT PRIMARY KEY
+      )`);
+      // The marker goes into the session's issue, so a retry after a lost
+      // response finds the issue instead of opening another. repo, owner/name,
+      // is fixed by the session's first write and kept for the session's life.
+      this.db.run(`CREATE TABLE IF NOT EXISTS issues (
+        session_id INTEGER PRIMARY KEY REFERENCES sessions(id),
+        marker TEXT NOT NULL,
+        number INTEGER,
+        repo TEXT
+      )`);
+      this.db.run(`CREATE TABLE IF NOT EXISTS issue_writes (
+        id INTEGER PRIMARY KEY,
+        session_id INTEGER NOT NULL REFERENCES sessions(id),
+        handoff TEXT NOT NULL,
+        tried INTEGER NOT NULL DEFAULT 0,
+        state TEXT
+      )`);
+      // A summary covers the session's messages up to through_id. The messages
+      // stay, so a later change of threshold can pick an older summary or none.
+      this.db.run(`CREATE TABLE IF NOT EXISTS summaries (
+        id INTEGER PRIMARY KEY,
+        session_id INTEGER NOT NULL REFERENCES sessions(id),
+        through_id INTEGER NOT NULL,
+        text TEXT NOT NULL
+      )`);
+      this.db.run("CREATE TABLE IF NOT EXISTS seed_pending (id INTEGER PRIMARY KEY CHECK (id = 1))");
+      if (fresh) this.db.run("INSERT OR IGNORE INTO seed_pending (id) VALUES (1)");
+    })();
   }
 
   // Records the group's firing fingerprints and, when they changed, queues a
@@ -383,5 +392,25 @@ export class Store {
     this.db
       .query("INSERT INTO spend (month, usd) VALUES (?, ?) ON CONFLICT (month) DO UPDATE SET usd = usd + excluded.usd")
       .run(month, usd);
+  }
+
+  seedPending(): boolean {
+    return this.db.query("SELECT 1 FROM seed_pending").get() !== null;
+  }
+
+  // Ends the wait for the spend seed with the month's spend read back.
+  seeded(month: string, usd: number) {
+    this.db.transaction(() => {
+      this.addSpend(month, usd);
+      this.db.run("DELETE FROM seed_pending");
+    })();
+  }
+
+  // Ends the wait for the spend seed with a notice to the owner instead.
+  seedFailed(key: string, text: string) {
+    this.db.transaction(() => {
+      this.noticeOnce(key, text);
+      this.db.run("DELETE FROM seed_pending");
+    })();
   }
 }
