@@ -82,6 +82,12 @@ const INPUT_ALLOWANCE_TOKENS = 4_000;
 
 // A turn cut off before its answer still tells the owner it ran.
 const STOPPED = "Stopped before answering: this turn reached its spend or step limit.";
+const NO_ANSWER = "Ended without an answer: the model returned no text, even when asked once more.";
+
+const ANSWER_NOW: ModelMessage = {
+  role: "user",
+  content: [{ type: "text", text: "Your last step had no answer. Answer the owner now with what you found, without tools." }],
+};
 
 class OverBudget extends Error {
   constructor(readonly cap: "turn-cap" | "monthly-cap") {
@@ -169,17 +175,19 @@ async function attempt(
     d.store.turnSpend(turn.id) + lastWorst > d.turnCapUsd ||
     d.store.monthSpend(month) + lastWorst > d.monthlyCapUsd;
   const { tools, repeated } = turnTools(d.tools, (tool) => d.metrics.toolCalls.inc({ tool }));
-  // A turn stopped before its answer and its summary would replace the cause an
-  // earlier turn found with STOPPED, so it hands off only to open the issue.
-  const handoffOf = (messages: ModelMessage[], answer: string | null) => {
+  // A turn ended without its answer and its summary would replace the cause an
+  // earlier turn found with why it ended, so it hands off only to open the issue.
+  const handoffOf = (messages: ModelMessage[], answer: string | null, ended: string) => {
     const group = d.store.groupKey(turn.sessionId);
     const firing = d.store.firingCount(turn.sessionId);
-    return handoff(messages, answer, group, firing) ?? (d.store.hasIssue(turn.sessionId) ? undefined : handoff(messages, STOPPED, group, firing)!);
+    return handoff(messages, answer, group, firing) ?? (d.store.hasIssue(turn.sessionId) ? undefined : handoff(messages, ended, group, firing)!);
   };
   // The steps that finished before the current one. A refused call keeps them,
   // since a tool they ran may have changed the cluster.
   let finished: ModelMessage[] = [];
-  let result;
+  let messages: ModelMessage[];
+  let text: string;
+  let stopped = STOPPED;
   try {
     // The summary call goes through the same model, so it is charged to the turn.
     const summarize = async (input: string) => {
@@ -196,9 +204,10 @@ async function attempt(
       return s.text;
     };
     const past = await history(d.store, turn.sessionId, d.compaction, summarize);
-    result = await generateText({
+    const instructions = [BASE_INSTRUCTIONS, await d.instructions(d.store.groupKey(turn.sessionId).alertname)].filter(Boolean).join("\n\n");
+    const result = await generateText({
       model,
-      instructions: [BASE_INSTRUCTIONS, await d.instructions(d.store.groupKey(turn.sessionId).alertname)].filter(Boolean).join("\n\n"),
+      instructions,
       messages: [...past, user],
       tools,
       maxOutputTokens: MAX_OUTPUT_TOKENS,
@@ -209,6 +218,32 @@ async function attempt(
         return repeated() ? { toolChoice: "none" } : undefined;
       },
     });
+    finished = result.responseMessages;
+    messages = [user, ...finished];
+    text = result.text;
+    // The loop ends without text when the step limit cuts it after a tool call,
+    // or when the model's last step holds only thinking. One call without tools
+    // asks for the answer the owner would otherwise never get.
+    if (!text.trim() && !overBudget()) {
+      console.log(JSON.stringify({ msg: "turn ended without an answer", sessionId: turn.sessionId, finishReason: result.finishReason, steps: result.steps.length }));
+      // A last step of thinking alone has nothing to show, and an assistant
+      // message with no text or tool call is not worth the risk of a refusal.
+      const last = messages.at(-1)!;
+      if (last.role === "assistant" && Array.isArray(last.content) && last.content.every((p) => p.type === "reasoning")) messages.pop();
+      messages.push(ANSWER_NOW);
+      const answer = await generateText({
+        model,
+        instructions,
+        messages: [...past, ...messages],
+        tools,
+        toolChoice: "none",
+        maxOutputTokens: MAX_OUTPUT_TOKENS,
+        timeout: { stepMs: d.stepTimeoutMs },
+      });
+      messages.push(...answer.responseMessages);
+      text = answer.text.trim() ? answer.text : "";
+      stopped = NO_ANSWER;
+    }
   } catch (e) {
     // The SDK wraps an error thrown on a retry in a RetryError.
     const refused = e instanceof OverBudget ? e : RetryError.isInstance(e) ? e.lastError : null;
@@ -222,15 +257,14 @@ async function attempt(
     }
     console.log(JSON.stringify({ msg: "turn refused by spend cap", sessionId: turn.sessionId, turnSpent }));
     const messages = finished.length > 0 ? [user, ...finished] : [];
-    d.store.endTurn(turn.id, "budget", messages, STOPPED, messages.length > 0 ? handoffOf(messages, null) : undefined);
+    d.store.endTurn(turn.id, "budget", messages, STOPPED, messages.length > 0 ? handoffOf(messages, null, STOPPED) : undefined);
     return { skipped: "budget" };
   }
   if (overBudget()) {
     console.log(JSON.stringify({ msg: "turn stopped at spend cap", sessionId: turn.sessionId, turnSpent: d.store.turnSpend(turn.id) }));
   }
-  const messages = [user, ...result.responseMessages];
-  d.store.endTurn(turn.id, "done", messages, result.text || STOPPED, handoffOf(messages, result.text || null));
-  return { text: result.text };
+  d.store.endTurn(turn.id, "done", messages, text || stopped, handoffOf(messages, text || null, stopped));
+  return { text };
 }
 
 // Every markdown file in the operating instructions clone except its README and

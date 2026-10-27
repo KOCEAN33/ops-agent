@@ -73,11 +73,12 @@ function failure(e: unknown, timeoutMs: number): { error: string; next: string }
 // Builds one turn's tools under the Tool contract in docs/design/shape.md: a
 // time limit on each call, and a timeout, failure or bad argument returned as a
 // result. The SDK would turn the last two into a result as well, but without a
-// next step. A repeated identical call is not run again, and `repeated` tells
-// the loop to make the model answer. onCall hears every call, run or not.
+// next step. A repeated identical call is not run again, since its result is
+// already above. One repeat can be a slip, so only a second one makes `repeated`
+// tell the loop to make the model answer. onCall hears every call, run or not.
 export function turnTools(defs: Record<string, ReadTool>, onCall: (name: string) => void = () => {}): { tools: ToolSet; repeated: () => boolean } {
   const seen = new Set<string>();
-  let repeated = false;
+  let repeats = 0;
   const tools: ToolSet = {};
   for (const [name, t] of Object.entries(defs)) {
     const timeoutMs = t.timeoutMs ?? TIMEOUT_MS;
@@ -90,8 +91,8 @@ export function turnTools(defs: Record<string, ReadTool>, onCall: (name: string)
         onCall(name);
         const key = JSON.stringify([name, raw]);
         if (seen.has(key)) {
-          repeated = true;
-          return wrap({ error: "This exact call already ran in this turn. Its result is above.", next: "Answer with what you have." });
+          repeats++;
+          return wrap({ error: "This exact call already ran in this turn. Its result is above.", next: "Use that result, try a different read, or answer." });
         }
         seen.add(key);
         const input = t.input.safeParse(raw);
@@ -109,5 +110,5 @@ export function turnTools(defs: Record<string, ReadTool>, onCall: (name: string)
       },
     });
   }
-  return { tools, repeated: () => repeated };
+  return { tools, repeated: () => repeats >= 2 };
 }

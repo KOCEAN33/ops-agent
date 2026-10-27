@@ -157,28 +157,94 @@ test("a bad argument is not passed to the tool and returns what was wrong and a 
   expect(out.next).toBeString();
 });
 
-test("a repeated identical call does not run again and the model is made to answer", async () => {
+test("a repeated identical call does not run again, and the model keeps its tools", async () => {
   let runs = 0;
-  const m = scripted([{ call: { name: "a" } }, { call: { name: "a" } }, { text: "answered" }]);
+  const m = scripted([{ call: { name: "a" } }, { call: { name: "a" } }, { call: { name: "b" } }, { text: "answered" }]);
   const d = deps(m, { probe: probe(async () => ++runs) });
   expect(await runTurn(d, turn(d, "alert"))).toEqual({ text: "answered" });
 
-  expect(runs).toBe(1);
-  expect(m.doGenerateCalls[1]!.toolChoice?.type).not.toBe("none");
-  expect(m.doGenerateCalls[2]!.toolChoice).toEqual({ type: "none" });
+  expect(runs).toBe(2);
+  expect(m.doGenerateCalls[2]!.toolChoice?.type).not.toBe("none");
+  expect(m.doGenerateCalls[3]!.toolChoice?.type).not.toBe("none");
+});
+
+test("a second repeated call makes the model answer", async () => {
+  const m = scripted([{ call: { name: "a" } }, { call: { name: "a" } }, { call: { name: "a" } }, { text: "answered" }]);
+  const d = deps(m, { probe: probe(async () => "ok") });
+  expect(await runTurn(d, turn(d, "alert"))).toEqual({ text: "answered" });
+
+  expect(m.doGenerateCalls[2]!.toolChoice?.type).not.toBe("none");
+  expect(m.doGenerateCalls[3]!.toolChoice).toEqual({ type: "none" });
 });
 
 test("the next turn offers the same tools again after a turn was made to answer", async () => {
-  const m = scripted([{ call: { name: "a" } }, { call: { name: "a" } }, { text: "answered" }, { call: { name: "a" } }]);
+  const m = scripted([{ call: { name: "a" } }, { call: { name: "a" } }, { call: { name: "a" } }, { text: "answered" }, { call: { name: "a" } }]);
   const d = deps(m, { probe: probe(async () => "ok") });
   await runTurn(d, turn(d, "first"));
   await runTurn(d, turn(d, "second"));
 
-  const second = m.doGenerateCalls[3]!;
+  const second = m.doGenerateCalls[4]!;
   expect(second.toolChoice?.type).not.toBe("none");
   expect(second.tools).toEqual(m.doGenerateCalls[0]!.tools);
   // The call repeats one from the first turn, and still runs.
-  expect(toolResults(m.doGenerateCalls[4]!.prompt).at(-1)).toContain('"ok"');
+  expect(toolResults(m.doGenerateCalls[5]!.prompt).at(-1)).toContain('"ok"');
+});
+
+test("a turn that ends without an answer is asked once more, without tools", async () => {
+  const m = scripted([{ call: { name: "a" } }, { text: "" }, { text: "answered" }]);
+  const d = deps(m, { probe: probe(async () => "ok") });
+  const t = turn(d, "alert");
+  expect(await runTurn(d, t)).toEqual({ text: "answered" });
+
+  expect(m.doGenerateCalls).toHaveLength(3);
+  expect(m.doGenerateCalls[2]!.toolChoice).toEqual({ type: "none" });
+  expect(d.store.nextPost()?.text).toBe("answered");
+});
+
+test("a last step of thinking alone is answered after the tool results, not after the thinking", async () => {
+  let n = 0;
+  const m = new MockLanguageModelV4({
+    doGenerate: async () => {
+      n++;
+      if (n === 1) {
+        return { content: [{ type: "tool-call", toolCallId: "call-1", toolName: "probe", input: '{"name":"a"}' }], finishReason: { unified: "tool-calls", raw: "tool_use" }, usage: zero, warnings: [] };
+      }
+      if (n === 2) return { content: [{ type: "reasoning", text: "" }], finishReason: { unified: "stop", raw: "end_turn" }, usage: zero, warnings: [] };
+      return { content: [{ type: "text", text: "answered" }], finishReason: { unified: "stop", raw: "end_turn" }, usage: zero, warnings: [] };
+    },
+  });
+  const d = deps(m, { probe: probe(async () => "ok") });
+  expect(await runTurn(d, turn(d, "alert"))).toEqual({ text: "answered" });
+
+  const prompt = m.doGenerateCalls[2]!.prompt;
+  expect(prompt.some((p) => p.role === "assistant" && p.content.every((c) => c.type === "reasoning"))).toBe(false);
+  expect(prompt.at(-2)!.role).toBe("tool");
+});
+
+test("a turn cut by its step limit is asked for an answer", async () => {
+  const m = scripted([...Array.from({ length: 25 }, (_, i) => ({ call: { name: `n${i}` } })), { text: "answered" }]);
+  const d = deps(m, { probe: probe(async () => "ok") });
+  expect(await runTurn(d, turn(d, "alert"))).toEqual({ text: "answered" });
+  expect(m.doGenerateCalls.at(-1)!.toolChoice).toEqual({ type: "none" });
+});
+
+test("a turn whose answer stays empty says so, not that a limit stopped it", async () => {
+  const m = scripted([{ text: "" }, { text: "" }]);
+  const d = deps(m, {});
+  await runTurn(d, turn(d, "alert"));
+
+  expect(m.doGenerateCalls).toHaveLength(2);
+  const text = d.store.nextPost()?.text ?? "";
+  expect(text).not.toBe("");
+  expect(text).not.toContain("limit");
+  expect(d.store.nextIssueWrite()?.handoff.cause).not.toContain("limit");
+});
+
+test("an answer of whitespace alone counts as no answer", async () => {
+  const m = scripted([{ text: "" }, { text: "\n" }]);
+  const d = deps(m, {});
+  await runTurn(d, turn(d, "alert"));
+  expect(d.store.nextPost()?.text.trim()).not.toBe("");
 });
 
 test("a reservation refused mid-turn keeps the steps that already ran", async () => {
