@@ -2,11 +2,11 @@
 
 ## Goal
 
-A deployed first responder per `docs/design.md`. Built and running in the cluster: the agent in `src/`, the Helm chart in `chart/`, and the image from the GHCR workflow. A test alert opened a Discord thread, an owner reply ran a second turn, and the alert group's issue holds the symptom, the cause and the actions, its body replaced on each turn. A resolved group's thread drops out of the channel's open thread list. Next is the step below, then the build order in `docs/candidates.md`.
+A deployed first responder per `docs/design.md`. Built and running in the cluster: the agent in `src/`, the Helm chart in `chart/`, and the image from the GHCR workflow. A test alert opened a Discord thread, an owner reply ran a second turn, and the alert group's issue holds the symptom, the cause and the actions, its body replaced on each turn. A resolved group's thread drops out of the channel's open thread list. The deployment's `stoppable` values hold the allowlist and the label domain, which reach the agent as `STOPPABLE_NAMESPACES` and `STOPPABLE_LABEL_DOMAIN`, and the stoppable workloads carry the label. No code reads either variable yet.
 
 ## Next steps
 
-1. **Stoppable namespaces and label.** The deployment holds neither the allowlist from Stoppable namespaces nor the label prefix from Autonomous targets in `docs/design/chosen.md`, and no workload carries the label. The owner picks the namespaces and the prefix's domain, and labels the workloads in the GitOps repositories. The chart takes both as values and passes them to the agent's environment. The RoleBinding per allowlisted namespace ships with the stopgap tools and their admission policy, never before, since its verbs reach past the stopgaps until the policy holds them. Due before the stopgap tools. Done when the deployment values hold both and the stoppable workloads in each allowlisted namespace carry the label.
+1. **Stopgap tools.** The first item of the build order in `docs/candidates.md`. The RoleBinding per allowlisted namespace ships with the tools and their admission policy, never before, since its verbs reach past the stopgaps until the policy holds them. The chart builds it from `stoppable.namespaces`.
 
 ## Pointers
 
@@ -20,6 +20,7 @@ A deployed first responder per `docs/design.md`. Built and running in the cluste
 - The R2 keys reach the cluster through the GitOps repository's ExternalSecret from item `ops-agent-r2`. Litestream's start log prints the endpoint with the Cloudflare account ID, which Loki keeps.
 - A GitHub App key in the secret store must keep its line breaks: a PEM pasted into a 1Password field through the app loses them.
 - A one-off pod of the agent's image needs `KUBERNETES_SERVICE_HOST` set empty when it mounts no ServiceAccount token, or the start fails reading `ca.crt`.
+- The dawarich namespace is allowlisted but its app workloads carry no stoppable label: its pinned upstream chart sets the Deployments' labels with no value to add one. They stop only through approval, and the report that Autonomous targets in `docs/design/chosen.md` requires names them.
 - A smoke test, which needs `pods/portforward` in the monitoring namespace: port-forward the Alertmanager Service, POST a `severity: warning` alert with a 5-minute `endsAt` to `/api/v2/alerts`, and watch the agent's log for `alert group`. It posts to Discord and opens a real issue. Alertmanager keeps a posted alert in memory only, so a restart before `endsAt` loses it and its resolve never reaches the agent.
 - The Anthropic console caps the organization's monthly spend at 100 USD, above the agent's 50 USD cap. It bounds what a seed that misses spend can cost.
 - A queue or outbox test whose loop never ends can keep `bun test` from exiting. Run such a test under `perl -e 'alarm 20; exec @ARGV' bun test ...`, since macOS has no `timeout`.
