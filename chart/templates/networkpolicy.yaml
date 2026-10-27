@@ -41,6 +41,8 @@ spec:
       ports:
         - port: metrics
         {{- if .Values.litestream.enabled }}
-        - port: ls-metrics
+        # By number: Cilium resolves a named port only from the pod's
+        # containers, and Litestream runs as a native sidecar.
+        - port: {{ .Values.litestream.metricsPort }}
         {{- end }}
     {{- end }}

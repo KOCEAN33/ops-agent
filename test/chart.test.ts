@@ -143,7 +143,9 @@ test.skipIf(!helm)("with Litestream and a scraper, Litestream's metrics are scra
   const config = Bun.YAML.parse(one(docs, "ConfigMap").data["litestream.yml"]) as any;
   expect(config.addr).toBe(`:${port}`);
 
-  expect(one(docs, "NetworkPolicy").spec.ingress[1]).toEqual({ from: [scraper], ports: [{ port: "metrics" }, { port: "ls-metrics" }] });
+  // By number: Cilium resolves a named port only from the pod's containers,
+  // not from a native sidecar's.
+  expect(one(docs, "NetworkPolicy").spec.ingress[1]).toEqual({ from: [scraper], ports: [{ port: "metrics" }, { port }] });
   expect(one(docs, "PodMonitor").spec.podMetricsEndpoints.map((e: any) => e.port)).toEqual(["metrics", "ls-metrics"]);
 
   const rules = one(docs, "PrometheusRule").spec.groups.flatMap((g: any) => g.rules);
