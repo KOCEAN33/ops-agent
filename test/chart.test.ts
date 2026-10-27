@@ -231,6 +231,24 @@ test.skipIf(!helm)("issues turn on with the App ID and the repository list", () 
   expect(noRepos).not.toContain("GITOPS_REPOS");
 });
 
+test.skipIf(!helm)("the stoppable namespaces and the label domain reach the agent, and the release's own namespace or kube-system is refused", () => {
+  const env = (values: unknown) =>
+    one(render(values).docs, "Deployment").spec.template.spec.containers[0].env as { name: string; value?: string }[];
+  const stoppable = { namespaces: ["example-app", "example-other"], labelDomain: "example.com" };
+  expect(env({ ...example, stoppable })).toEqual(
+    expect.arrayContaining([
+      { name: "STOPPABLE_NAMESPACES", value: "example-app,example-other" },
+      { name: "STOPPABLE_LABEL_DOMAIN", value: "example.com" },
+    ]),
+  );
+  expect(env(example).map((e) => e.name)).not.toContain("STOPPABLE_NAMESPACES");
+  for (const bad of ["default", "kube-system", " default"]) {
+    const { docs, error } = render({ ...example, stoppable: { ...stoppable, namespaces: ["example-app", bad] } });
+    expect(docs).toEqual([]);
+    expect(error).toContain(`must not hold ${JSON.stringify(bad)}`);
+  }
+});
+
 test.skipIf(!helm)("an ID written as a YAML number fails the render instead of turning into a float", () => {
   for (const over of [
     { discord: { channelId: 123456789012345678, ownerId: "200" } },

@@ -46,6 +46,14 @@ lokiUrl: ""
 # Hosts whose links survive in Discord posts and issues.
 linkAllowlist: []
 
+# The namespaces a stopgap may act in, and the domain of the label that opts a
+# workload in them into an autonomous stop, as in <labelDomain>/stoppable. Never
+# list a namespace that stores data for others or runs the platform, nor the
+# release's own or kube-system, which the chart refuses.
+stoppable:
+  namespaces: []
+  labelDomain: ""
+
 # Both set turn the Discord bot on. Quote every ID: Helm reads a bare number as
 # a float, so the chart refuses one.
 discord:

@@ -101,6 +101,19 @@ spec:
             - name: LINK_ALLOWLIST
               value: {{ join "," . | quote }}
             {{- end }}
+            {{- with .Values.stoppable.namespaces }}
+            {{- range . }}
+            {{- if or (eq . $.Release.Namespace "kube-system") (ne . (trim .)) (not .) }}
+            {{- fail (printf "stoppable.namespaces must not hold %q: the release's own namespace, kube-system or a name with spaces" .) }}
+            {{- end }}
+            {{- end }}
+            - name: STOPPABLE_NAMESPACES
+              value: {{ join "," . | quote }}
+            {{- end }}
+            {{- with .Values.stoppable.labelDomain }}
+            - name: STOPPABLE_LABEL_DOMAIN
+              value: {{ . | quote }}
+            {{- end }}
             {{- include "ops-agent.secretEnv" (dict "env" "ANTHROPIC_API_KEY" "secret" $secret "key" $k.anthropicApiKey) | nindent 12 }}
             {{- include "ops-agent.secretEnv" (dict "env" "WEBHOOK_TOKEN" "secret" $secret "key" $k.webhookToken) | nindent 12 }}
             {{- if $discord }}
