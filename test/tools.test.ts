@@ -3,6 +3,7 @@ import { MockLanguageModelV4 } from "ai/test";
 import type { LanguageModelV4Prompt } from "@ai-sdk/provider";
 import { z } from "zod";
 import { MAX_OUTPUT_TOKENS, runTurn, type AgentDeps } from "../src/agent/turn";
+import { Metrics } from "../src/metrics";
 import { Store } from "../src/store";
 import { MAX_RESULT_CHARS, readTool, ToolError, type ReadTool } from "../src/tools/contract";
 
@@ -50,6 +51,7 @@ function deps(m: MockLanguageModelV4, tools: Record<string, ReadTool>, over: Par
     tools,
     stepTimeoutMs: 60_000,
     compaction: { maskBytes: Infinity, summaryBytes: Infinity },
+    metrics: new Metrics(),
     ...over,
   };
 }

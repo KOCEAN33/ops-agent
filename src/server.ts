@@ -2,6 +2,7 @@ import { anthropic } from "@ai-sdk/anthropic";
 import { timingSafeEqual } from "node:crypto";
 import { readInstructions, runTurn, type AgentDeps } from "./agent/turn";
 import { parseWebhook } from "./alert";
+import { Metrics } from "./metrics";
 import { connect, onMessage, Outbox, whileTyping } from "./owner/discord";
 import { loadConfig, settingsFromYaml, type Config } from "./config";
 import { gitopsTools } from "./tools/gitops";
@@ -44,6 +45,15 @@ export function createHandler(d: ServerDeps) {
     // stored before the response and runs after it, so a slow model never
     // times out the webhook and a crash never loses the turn.
     return Response.json(n.key, { status: 202 });
+  };
+}
+
+// Serves the metrics on their own port, so the scraper the NetworkPolicy
+// admits there never reaches the webhook.
+export function metricsHandler(metrics: Metrics) {
+  return async (req: Request): Promise<Response> => {
+    if (req.method !== "GET" || new URL(req.url).pathname !== "/metrics") return new Response(null, { status: 404 });
+    return new Response(metrics.text(), { headers: { "content-type": "text/plain; version=0.0.4; charset=utf-8" } });
   };
 }
 
@@ -120,6 +130,7 @@ if (import.meta.main) {
     tools: await readTools(config, now),
     stepTimeoutMs: STEP_TIMEOUT_MS,
     compaction: COMPACTION,
+    metrics: new Metrics(),
   };
   console.log(JSON.stringify({ msg: "tools", tools: Object.keys(agent.tools) }));
 
@@ -168,4 +179,12 @@ if (import.meta.main) {
     fetch: createHandler({ store, token: config.webhookToken, kick: () => queue.kick() }),
   });
   console.log(`listening on ${server.url}`);
+  if (config.metricsPort !== null) {
+    // A series that first appears with a value loses that value to increase(),
+    // so the counters start at zero.
+    agent.metrics.spend.inc({ model: agent.model.modelId }, 0);
+    for (const end of ["done", "budget", "monthly-cap", "failed"] as const) agent.metrics.turns.inc({ end }, 0);
+    const m = Bun.serve({ port: config.metricsPort, fetch: metricsHandler(agent.metrics) });
+    console.log(`metrics on ${m.url}`);
+  }
 }

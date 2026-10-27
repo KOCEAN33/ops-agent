@@ -1,4 +1,5 @@
 {{- $am := .Values.alertmanager -}}
+{{- $scraper := .Values.metrics.scraper -}}
 {{- if not (or $am.namespaceSelector $am.podSelector) }}
 {{- fail "alertmanager.namespaceSelector or alertmanager.podSelector is required: the webhook admits ingress from Alertmanager alone" }}
 {{- end }}
@@ -27,3 +28,16 @@ spec:
           {{- end }}
       ports:
         - port: http
+    {{- if or $scraper.namespaceSelector $scraper.podSelector }}
+    - from:
+        - {{- with $scraper.namespaceSelector }}
+          namespaceSelector:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with $scraper.podSelector }}
+          podSelector:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      ports:
+        - port: metrics
+    {{- end }}

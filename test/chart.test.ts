@@ -23,7 +23,7 @@ const example = {
   ciliumEgress: { enabled: true, inCluster: [{ namespace: "example-monitoring", podLabels: { app: "prometheus" }, ports: [9090] }] },
 };
 
-type Doc = { kind: string; metadata: { name: string }; [k: string]: any };
+type Doc = { kind: string; metadata: { name: string; labels?: Record<string, string> }; [k: string]: any };
 
 // Renders the chart with values. Returns the documents, or the error text.
 function render(values: unknown): { docs: Doc[]; error: string } {
@@ -80,6 +80,35 @@ test.skipIf(!helm)("ingress to the agent comes from Alertmanager alone", () => {
       ports: [{ port: "http" }],
     },
   ]);
+});
+
+const scraper = {
+  namespaceSelector: { matchLabels: { "kubernetes.io/metadata.name": "example-monitoring" } },
+  podSelector: { matchLabels: { "app.kubernetes.io/name": "prometheus" } },
+};
+
+test.skipIf(!helm)("with a scraper set, it alone reaches the metrics port, which a PodMonitor scrapes", () => {
+  const { docs } = render({ ...example, metrics: { scraper, podMonitor: { labels: { release: "example" } } } });
+  expect(one(docs, "NetworkPolicy").spec.ingress).toEqual([
+    {
+      from: [{ namespaceSelector: example.alertmanager.namespaceSelector, podSelector: example.alertmanager.podSelector }],
+      ports: [{ port: "http" }],
+    },
+    { from: [scraper], ports: [{ port: "metrics" }] },
+  ]);
+  const c = one(docs, "Deployment").spec.template.spec.containers[0];
+  const port = c.ports.find((p: any) => p.name === "metrics");
+  expect(c.env).toContainEqual({ name: "METRICS_PORT", value: String(port.containerPort) });
+  const m = one(docs, "PodMonitor");
+  expect(m.metadata.labels).toMatchObject({ release: "example" });
+  expect(m.spec.selector.matchLabels).toEqual(one(docs, "Deployment").spec.selector.matchLabels);
+  expect(m.spec.podMetricsEndpoints).toEqual([expect.objectContaining({ port: "metrics", path: "/metrics" })]);
+});
+
+test.skipIf(!helm)("without a scraper, no PodMonitor is made and the metrics port admits nothing", () => {
+  const { docs } = render(example);
+  expect(docs.filter((d) => d.kind === "PodMonitor")).toEqual([]);
+  expect(one(docs, "NetworkPolicy").spec.ingress).toHaveLength(1);
 });
 
 test.skipIf(!helm)("the chart refuses to render without an Alertmanager selector", () => {

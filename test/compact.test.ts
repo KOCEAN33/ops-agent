@@ -3,6 +3,7 @@ import { MockLanguageModelV4 } from "ai/test";
 import type { LanguageModelV4CallOptions, LanguageModelV4Prompt } from "@ai-sdk/provider";
 import { z } from "zod";
 import { runTurn, type AgentDeps } from "../src/agent/turn";
+import { Metrics } from "../src/metrics";
 import { Store } from "../src/store";
 import { readTool } from "../src/tools/contract";
 
@@ -57,6 +58,7 @@ function deps(m: MockLanguageModelV4, store: Store, compaction: AgentDeps["compa
     tools: { probe },
     stepTimeoutMs: 60_000,
     compaction,
+    metrics: new Metrics(),
   };
 }
 

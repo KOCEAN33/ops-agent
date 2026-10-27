@@ -1,0 +1,20 @@
+{{- $scraper := .Values.metrics.scraper -}}
+{{- if or $scraper.namespaceSelector $scraper.podSelector }}
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: {{ include "ops-agent.fullname" . }}
+  labels:
+    {{- include "ops-agent.labels" . | nindent 4 }}
+    {{- with .Values.metrics.podMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "ops-agent.selector" . | nindent 6 }}
+  podMetricsEndpoints:
+    - port: metrics
+      path: /metrics
+      interval: {{ .Values.metrics.podMonitor.interval }}
+{{- end }}

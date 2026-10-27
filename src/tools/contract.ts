@@ -74,8 +74,8 @@ function failure(e: unknown, timeoutMs: number): { error: string; next: string }
 // limit on each call, and a timeout, failure or bad argument returned as a
 // result. The SDK would turn the last two into a result as well, but without a
 // next step. A repeated identical call is not run again, and `repeated` tells
-// the loop to make the model answer.
-export function turnTools(defs: Record<string, ReadTool>): { tools: ToolSet; repeated: () => boolean } {
+// the loop to make the model answer. onCall hears every call, run or not.
+export function turnTools(defs: Record<string, ReadTool>, onCall: (name: string) => void = () => {}): { tools: ToolSet; repeated: () => boolean } {
   const seen = new Set<string>();
   let repeated = false;
   const tools: ToolSet = {};
@@ -87,6 +87,7 @@ export function turnTools(defs: Record<string, ReadTool>): { tools: ToolSet; rep
       // bad argument reaches the check below.
       inputSchema: jsonSchema(z.toJSONSchema(t.input) as Parameters<typeof jsonSchema>[0]),
       execute: async (raw: unknown) => {
+        onCall(name);
         const key = JSON.stringify([name, raw]);
         if (seen.has(key)) {
           repeated = true;

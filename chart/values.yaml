@@ -79,6 +79,19 @@ alertmanager:
   namespaceSelector: {}
   podSelector: {}
 
+# /metrics on its own port, apart from the webhook. A scraper selector admits
+# those pods to it and makes a PodMonitor, which needs the Prometheus
+# Operator's CRDs. Without one, nothing reaches the port.
+metrics:
+  port: 9464
+  scraper:
+    namespaceSelector: {}
+    podSelector: {}
+  podMonitor:
+    # Such as the label the Prometheus resource's podMonitorSelector matches.
+    labels: {}
+    interval: 30s
+
 # Egress through the CNI's FQDN rules. Off, egress is not limited.
 ciliumEgress:
   enabled: false

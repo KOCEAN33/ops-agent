@@ -11,6 +11,7 @@ import {
 import { existsSync } from "node:fs";
 import { history, SUMMARY_INSTRUCTIONS, type Compaction } from "./compact";
 import type { Price } from "../config";
+import type { Metrics, TurnEnd } from "../metrics";
 import { handoff } from "../owner/issues";
 import type { Store, Turn } from "../store";
 import { turnTools, type ReadTool } from "../tools/contract";
@@ -46,6 +47,7 @@ export interface AgentDeps {
   // would otherwise hold one of the queue's few turn slots until a restart.
   stepTimeoutMs: number;
   compaction: Compaction;
+  metrics: Metrics;
 }
 
 export function cost(u: LanguageModelUsage, p: Price): number {
@@ -87,13 +89,37 @@ class OverBudget extends Error {
   }
 }
 
+type Attempt = { text: string } | { skipped: "monthly-cap" | "budget" };
+
 // Runs one attempt of a turn. It ends the turn, with its messages, unless the
 // monthly cap refuses it before any step finishes ("monthly-cap") or it
 // throws. Either way the turn stays pending and runs again.
-export async function runTurn(
+export async function runTurn(d: AgentDeps, turn: Pick<Turn, "id" | "sessionId" | "text">): Promise<Attempt> {
+  const started = performance.now();
+  const tokens = { input: 0, output: 0 };
+  let end: TurnEnd = "failed";
+  try {
+    const r = await attempt(d, turn, tokens);
+    end = "text" in r ? "done" : r.skipped;
+    return r;
+  } finally {
+    const m = d.metrics;
+    m.turns.inc({ end });
+    if (end === "done" || end === "budget") {
+      const model = { model: d.model.modelId };
+      m.turnSpend.observe(model, d.store.turnSpend(turn.id));
+      m.turnSeconds.observe(model, (performance.now() - started) / 1000);
+      m.turnInputTokens.observe(model, tokens.input);
+      m.turnOutputTokens.observe(model, tokens.output);
+    }
+  }
+}
+
+async function attempt(
   d: AgentDeps,
   turn: Pick<Turn, "id" | "sessionId" | "text">,
-): Promise<{ text: string } | { skipped: "monthly-cap" | "budget" }> {
+  tokens: { input: number; output: number },
+): Promise<Attempt> {
   const month = d.now().toISOString().slice(0, 7);
   if (d.store.monthSpend(month) >= d.monthlyCapUsd) return { skipped: "monthly-cap" };
 
@@ -116,6 +142,8 @@ export async function runTurn(
         try {
           const result = await doGenerate();
           actual = cost(providerUsage(result.usage), d.price);
+          tokens.input += result.usage.inputTokens.total ?? 0;
+          tokens.output += result.usage.outputTokens.total ?? 0;
           return result;
         } catch (e) {
           // The API answered with an error status, so it billed nothing. Any
@@ -125,6 +153,7 @@ export async function runTurn(
           throw e;
         } finally {
           d.store.settle(month, turn.id, actual - worst);
+          d.metrics.spend.inc({ model: d.model.modelId }, actual);
         }
       },
     },
@@ -138,7 +167,7 @@ export async function runTurn(
   const overBudget = () =>
     d.store.turnSpend(turn.id) + lastWorst > d.turnCapUsd ||
     d.store.monthSpend(month) + lastWorst > d.monthlyCapUsd;
-  const { tools, repeated } = turnTools(d.tools);
+  const { tools, repeated } = turnTools(d.tools, (tool) => d.metrics.toolCalls.inc({ tool }));
   // A turn stopped before its answer and its summary would replace the cause an
   // earlier turn found with STOPPED, so it hands off only to open the issue.
   const handoffOf = (messages: ModelMessage[], answer: string | null) => {

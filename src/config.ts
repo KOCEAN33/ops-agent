@@ -15,6 +15,9 @@ export interface Config {
   webhookToken: string;
   instructionsDir: string | null;
   port: number;
+  // The port /metrics is served on, apart from the webhook. Off when unset, as
+  // for a local run.
+  metricsPort: number | null;
   // Each read source left unset turns its tools off.
   kube: { url: string; serviceAccount: boolean } | null;
   prometheusUrl: string | null;
@@ -184,6 +187,7 @@ export function loadConfig(env: Env = process.env): Config {
     webhookToken: required(env, "WEBHOOK_TOKEN"),
     instructionsDir: env.INSTRUCTIONS_DIR || null,
     port: Number(env.PORT ?? 8080),
+    metricsPort: env.METRICS_PORT ? Number(env.METRICS_PORT) : null,
     kube: kube(env),
     prometheusUrl: url(env.PROMETHEUS_URL),
     lokiUrl: url(env.LOKI_URL),

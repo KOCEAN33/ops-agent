@@ -5,6 +5,7 @@ import type { LanguageModelV4CallOptions } from "@ai-sdk/provider";
 import { z } from "zod";
 import { runTurn, type AgentDeps } from "../src/agent/turn";
 import { GoneIssue, githubApi, IssueQueue, issueRepositoryTool, issueSummaryTool, Refused, type Handoff, type IssueApi } from "../src/owner/issues";
+import { Metrics } from "../src/metrics";
 import { Store } from "../src/store";
 import { readTool, type ReadTool } from "../src/tools/contract";
 
@@ -45,6 +46,7 @@ function deps(store: Store, m: MockLanguageModelV4, tools: Record<string, ReadTo
     tools,
     stepTimeoutMs: 60_000,
     compaction: { maskBytes: Infinity, summaryBytes: Infinity },
+    metrics: new Metrics(),
   };
 }
 

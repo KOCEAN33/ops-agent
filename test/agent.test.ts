@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { MockLanguageModelV4 } from "ai/test";
 import { APICallError, type LanguageModelUsage } from "ai";
 import { cost, MAX_OUTPUT_TOKENS, readInstructions, runTurn, type AgentDeps } from "../src/agent/turn";
+import { Metrics } from "../src/metrics";
 import { Store } from "../src/store";
 import type { GroupKey } from "../src/alert";
 
@@ -74,6 +75,7 @@ function deps(m: MockLanguageModelV4, over: Partial<AgentDeps> = {}): AgentDeps 
     tools: {},
     stepTimeoutMs: 60_000,
     compaction: { maskBytes: Infinity, summaryBytes: Infinity },
+    metrics: new Metrics(),
     ...over,
   };
 }
