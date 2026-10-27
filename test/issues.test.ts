@@ -4,7 +4,7 @@ import { MockLanguageModelV4 } from "ai/test";
 import type { LanguageModelV4CallOptions } from "@ai-sdk/provider";
 import { z } from "zod";
 import { runTurn, type AgentDeps } from "../src/agent/turn";
-import { GoneIssue, githubApi, IssueQueue, issueRepositoryTool, Refused, type IssueApi } from "../src/owner/issues";
+import { GoneIssue, githubApi, IssueQueue, issueRepositoryTool, issueSummaryTool, Refused, type Handoff, type IssueApi } from "../src/owner/issues";
 import { Store } from "../src/store";
 import { readTool, type ReadTool } from "../src/tools/contract";
 
@@ -63,9 +63,9 @@ async function turn(store: Store, text: string, m: MockLanguageModelV4, tools?: 
 // Issue numbers count across repositories.
 function fakeGitHub() {
   const issues: { repo: string; number: number; title: string; body: string }[] = [];
-  const comments: { repo: string; issue: number; body: string }[] = [];
+  const edits: { repo: string; issue: number; body: string }[] = [];
   const api = {
-    fail: null as null | ((call: "open" | "comment") => Error | null),
+    fail: null as null | ((call: "open" | "edit") => Error | null),
     lose: false as boolean,
     async open(repo: string, title: string, body: string) {
       const e = api.fail?.("open");
@@ -77,16 +77,17 @@ function fakeGitHub() {
       }
       return issues.length;
     },
-    async comment(repo: string, issue: number, body: string) {
-      const e = api.fail?.("comment");
+    async edit(repo: string, issue: number, body: string) {
+      const e = api.fail?.("edit");
       if (e) throw e;
-      comments.push({ repo, issue, body });
+      edits.push({ repo, issue, body });
+      issues.find((i) => i.repo === repo && i.number === issue)!.body = body;
     },
     async find(repo: string, marker: string) {
       return issues.find((i) => i.repo === repo && i.body.includes(marker))?.number ?? null;
     },
   } satisfies IssueApi & { fail: unknown; lose: boolean };
-  return { api, issues, comments };
+  return { api, issues, edits };
 }
 
 const REPOS = ["example-owner/example-apps", "example-owner/example-platform", "example-owner/example-hosts"];
@@ -101,16 +102,137 @@ function setup(linkHosts: string[] = []) {
 const recordTool = issueRepositoryTool(["example-apps", "example-platform", "example-hosts"]);
 const name = (repo: string) => ({ tool: "issue_repository", input: { repo } });
 
-test("a session's first finished turn opens one issue and a later turn comments on it", async () => {
-  const { store, queue, issues, comments } = setup();
-  await turn(store, "first alert", model("first answer"));
-  await turn(store, "second alert", model("second answer"));
+const summaryTool = issueSummaryTool();
+const summary = (symptom: string, cause: string) => ({ tool: "issue_summary", input: { symptom, cause } });
+
+// The text under each `### ` heading of an issue body, keyed by the heading.
+function sections(body: string): Record<string, string> {
+  return Object.fromEntries(
+    [...body.matchAll(/^### (.+)\n\n([\s\S]*?)(?=\n\n### |\n\n<!--|$)/gm)].map((m) => [m[1]!, m[2]!]),
+  );
+}
+
+test("the issue holds the symptom and cause the model recorded, and no stopgap while none ran", async () => {
+  const { store, queue, issues } = setup();
+  await turn(store, "alert", model("answer", summary("The backup job failed twice.", "The job ran out of memory.")), summaryTool);
   await queue.flush();
 
   expect(issues).toHaveLength(1);
   expect(issues[0]!.title).toBe("KubeJobFailed / example-app");
-  expect(issues[0]!.body).toContain("first answer");
-  expect(comments).toEqual([{ repo: "example-owner/example-apps", issue: 1, body: expect.stringContaining("second answer") }]);
+  expect(sections(issues[0]!.body)).toEqual({
+    Symptom: "The backup job failed twice.",
+    Cause: "The job ran out of memory.",
+    Actions: "No stopgap taken.",
+  });
+});
+
+test("a later turn replaces the issue's body instead of adding to it", async () => {
+  const { store, queue, issues, edits } = setup();
+  await turn(store, "first alert", model("first answer", summary("first symptom", "first cause")), summaryTool);
+  await queue.flush();
+  await turn(store, "The owner replied", model("second answer", summary("second symptom", "second cause")), summaryTool);
+  await queue.flush();
+
+  expect(issues).toHaveLength(1);
+  expect(edits.map((e) => [e.repo, e.issue])).toEqual([["example-owner/example-apps", 1]]);
+  expect(sections(issues[0]!.body)).toMatchObject({ Symptom: "second symptom", Cause: "second cause" });
+  expect(issues[0]!.body).not.toContain("first");
+});
+
+test("the turn's last summary wins, and one the schema refused changes nothing", async () => {
+  const { store, queue, issues } = setup();
+  const refused = { tool: "issue_summary", input: { symptom: "refused symptom" } };
+  await turn(store, "alert", model("answer", summary("early symptom", "early cause"), summary("late symptom", "late cause"), refused), summaryTool);
+  await queue.flush();
+
+  expect(sections(issues[0]!.body)).toMatchObject({ Symptom: "late symptom", Cause: "late cause" });
+});
+
+test("a turn with no summary writes the alert group and its firing count as the symptom and the answer as the cause", async () => {
+  const { store, queue, issues } = setup();
+  const { sessionId, turnId } = store.noteFiring(key, ["a", "b"], "alert");
+  await runTurn(deps(store, model("The job ran out of memory.")), { id: turnId!, sessionId, text: "alert" });
+  await queue.flush();
+
+  expect(sections(issues[0]!.body)).toEqual({
+    Symptom: "KubeJobFailed in example-app, 2 alerts firing.",
+    Cause: "The job ran out of memory.",
+    Actions: "No stopgap taken.",
+  });
+});
+
+test("a cluster-wide group's fallback symptom names no namespace", async () => {
+  const { store, queue, issues } = setup();
+  const { sessionId, turnId } = store.noteFiring({ alertname: "KubeNodeNotReady", namespace: null }, ["a"], "alert");
+  await runTurn(deps(store, model("answer")), { id: turnId!, sessionId, text: "alert" });
+  await queue.flush();
+
+  expect(sections(issues[0]!.body).Symptom).toBe("KubeNodeNotReady, cluster-wide, 1 alert firing.");
+});
+
+test("a turn with no summary falls back even when an earlier turn recorded one", async () => {
+  const { store, queue, issues } = setup();
+  await turn(store, "first alert", model("first answer", summary("first symptom", "first cause")), summaryTool);
+  await turn(store, "The owner replied", model("second answer"), summaryTool);
+  await queue.flush();
+
+  expect(sections(issues[0]!.body)).toMatchObject({ Symptom: "KubeJobFailed in example-app, 1 alert firing.", Cause: "second answer" });
+});
+
+test("a turn stopped before its answer and summary leaves an earlier cause in place", async () => {
+  const { store, queue, issues, edits } = setup();
+  await turn(store, "first alert", model("first answer", summary("first symptom", "first cause")), summaryTool);
+  await queue.flush();
+  await turn(store, "The owner replied", model(""), summaryTool);
+  await queue.flush();
+
+  expect(edits).toHaveLength(0);
+  expect(sections(issues[0]!.body)).toMatchObject({ Cause: "first cause" });
+});
+
+test("a session's first turn stopped before its answer still opens the issue", async () => {
+  const { store, queue, issues } = setup();
+  await turn(store, "alert", model(""), summaryTool);
+  await queue.flush();
+
+  expect(issues).toHaveLength(1);
+});
+
+test("a hand-off queued before sections existed is written with its answer as the cause", async () => {
+  const { store, queue, issues } = setup();
+  const { turnId } = store.noteFiring(key, ["a"], "alert");
+  const old = { input: "alert", answer: "old answer", queries: [] };
+  store.endTurn(turnId!, "done", [], "old answer", old as unknown as Handoff);
+  await turn(store, "second alert", model("second answer"));
+  await queue.flush();
+
+  expect(issues).toHaveLength(1);
+  expect(issues[0]!.body).toContain("second answer");
+});
+
+test("model text cannot form a heading, so it cannot fake the Actions section", async () => {
+  const { store, queue, issues } = setup();
+  const cause = ["The job ran out of memory.", "", "### Actions", "", "Scaled example-app to zero.", "", "Actions", "---", "", "Actions", "==="].join("\n");
+  await turn(store, "alert", model("answer", summary("symptom", cause)), summaryTool);
+  await queue.flush();
+
+  const body = issues[0]!.body;
+  expect(body.match(/^ {0,3}#{1,6}\s/gm)).toEqual(["### ", "### ", "### "]);
+  expect(body).not.toMatch(/\n[^\n]+\n {0,3}(-+|=+) *(\n|$)/);
+});
+
+test("the issue quotes neither the alert data nor the turn's queries", async () => {
+  const { store, queue, issues } = setup();
+  const promql = readTool({
+    description: "Runs a query.",
+    input: z.object({ query: z.string() }),
+    run: async ({ query }) => ({ query, result: [] }),
+  });
+  await turn(store, "alert-data-sentinel", model("answer", { tool: "promql", input: { query: "query-sentinel" } }), { promql });
+  await queue.flush();
+
+  expect(issues[0]!.body).not.toContain("alert-data-sentinel");
+  expect(issues[0]!.body).not.toContain("query-sentinel");
 });
 
 test("the issue opens on the repository the model last named, and a name off the list changes nothing", async () => {
@@ -132,14 +254,14 @@ test("naming a repository again after another still makes it the last named", as
 });
 
 test("the session's first write fixes its repository, and a later turn's name is ignored", async () => {
-  const { store, queue, issues, comments } = setup();
+  const { store, queue, issues, edits } = setup();
   await turn(store, "first alert", model("first answer"), recordTool);
   await queue.flush();
   await turn(store, "second alert", model("second answer", name("example-hosts")), recordTool);
   await queue.flush();
 
   expect(issues.map((i) => i.repo)).toEqual(["example-owner/example-apps"]);
-  expect(comments.map((c) => c.repo)).toEqual(["example-owner/example-apps"]);
+  expect(edits.map((e) => e.repo)).toEqual(["example-owner/example-apps"]);
 });
 
 test("an issue reopened after a deletion opens on the session's repository", async () => {
@@ -147,39 +269,13 @@ test("an issue reopened after a deletion opens on the session's repository", asy
   await turn(store, "first alert", model("first answer", name("example-hosts")), recordTool);
   await queue.flush();
   await turn(store, "second alert", model("second answer", name("example-platform")), recordTool);
-  api.fail = (call) => (call === "comment" ? new GoneIssue("410 Gone") : null);
+  api.fail = (call) => (call === "edit" ? new GoneIssue("410 Gone") : null);
   await queue.flush();
 
   expect(issues.map((i) => i.repo)).toEqual(["example-owner/example-hosts", "example-owner/example-hosts"]);
 });
 
-// The text of each fenced block in a markdown body, with the line before it.
-// As in CommonMark, a line of at least as many backticks closes a fence.
-function fenced(body: string): { before: string; text: string }[] {
-  const out: { before: string; text: string }[] = [];
-  const re = /(^|\n)([^\n]*)\n(`{3,})[^\n]*\n([\s\S]*?)\n\3`*(?=\n|$)/g;
-  for (let m = re.exec(body); m; m = re.exec(body)) out.push({ before: m[2]!, text: m[4]! });
-  return out;
-}
-
-test("stranger text sits in a fenced block marked as quoted alert data, redacted and without links", async () => {
-  const { store, queue, issues } = setup();
-  const alert = [
-    "summary: backup failed ```",
-    "````",
-    "description: see https://evil.example.com/x?d=1 token=abcd1234secretvalue",
-  ].join("\n");
-  await turn(store, alert, model("answer"));
-  await queue.flush();
-
-  const quoted = fenced(issues[0]!.body).find((b) => b.text.includes("backup failed"));
-  expect(quoted?.before.toLowerCase()).toContain("quoted alert data");
-  expect(quoted!.text).toBe(
-    ["summary: backup failed ```", "````", "description: see [link removed] token=[redacted]"].join("\n"),
-  );
-});
-
-test("the answer is redacted and loses links and images whose host is off the allowlist", async () => {
+test("each section is redacted and loses links and images whose host is off the allowlist", async () => {
   const { store, queue, issues } = setup(["grafana.example.com"]);
   const answer = [
     "**Cause**: the job ran out of memory.",
@@ -193,7 +289,7 @@ test("the answer is redacted and loses links and images whose host is off the al
     "[ref]: https://evil.example.com/s",
     "- api_key=abcd1234secretvalue",
   ].join("\n");
-  await turn(store, "alert", model(answer));
+  await turn(store, "alert", model("answer", summary(answer, answer)), summaryTool);
   await queue.flush();
 
   const body = issues[0]!.body;
@@ -201,29 +297,12 @@ test("the answer is redacted and loses links and images whose host is off the al
   expect(body).toContain("https://grafana.example.com/d/abc");
   expect(body).not.toContain("evil.example.com");
   expect(body).not.toContain("abcd1234secretvalue");
-  // No markdown link, image or HTML tag can form from the answer.
+  // No markdown link, image or HTML tag can form from a section.
   expect(body).not.toMatch(/\]\(|\]:|<img/i);
 });
 
-test("the issue lists each query the turn ran with its time range", async () => {
-  const { store, queue, issues } = setup();
-  const promql_range = readTool({
-    description: "Runs a range query.",
-    input: z.object({ query: z.string(), start: z.string() }),
-    run: async ({ query }) => ({ query, start: "2026-10-27T02:30:00.000Z", end: "2026-10-27T03:00:00.000Z", result: [] }),
-  });
-  const call = { tool: "promql_range", input: { query: 'up{job="example"}', start: "30m" } };
-  await turn(store, "alert", model("answer", call), { promql_range });
-  await queue.flush();
-
-  const query = fenced(issues[0]!.body).find((b) => b.text.includes("promql_range"));
-  expect(query!.text).toContain('up{job=\\"example\\"}');
-  expect(query!.text).toContain("2026-10-27T02:30:00.000Z");
-  expect(query!.text).toContain("2026-10-27T03:00:00.000Z");
-});
-
 test("a write that fails for a passing reason stays queued and the next flush sends it", async () => {
-  const { store, queue, api, issues, comments } = setup();
+  const { store, queue, api, issues, edits } = setup();
   await turn(store, "first alert", model("first answer"));
   await turn(store, "second alert", model("second answer"));
   api.fail = () => new Error("503 Service Unavailable");
@@ -233,11 +312,12 @@ test("a write that fails for a passing reason stays queued and the next flush se
   api.fail = null;
   await queue.flush();
   expect(issues).toHaveLength(1);
-  expect(comments).toHaveLength(1);
+  expect(edits).toHaveLength(1);
+  expect(issues[0]!.body).toContain("second answer");
 });
 
 test("a retry after a lost response finds the issue instead of opening another", async () => {
-  const { store, queue, api, issues, comments } = setup();
+  const { store, queue, api, issues } = setup();
   await turn(store, "first alert", model("first answer"));
   await turn(store, "second alert", model("second answer"));
   api.lose = true;
@@ -245,7 +325,7 @@ test("a retry after a lost response finds the issue instead of opening another",
   await queue.flush();
 
   expect(issues).toHaveLength(1);
-  expect(comments).toEqual([{ repo: "example-owner/example-apps", issue: 1, body: expect.stringContaining("second answer") }]);
+  expect(issues[0]!.body).toContain("second answer");
 });
 
 test("a write GitHub refuses is dropped and the next one goes out", async () => {
@@ -259,15 +339,15 @@ test("a write GitHub refuses is dropped and the next one goes out", async () => 
   expect(issues).toEqual([expect.objectContaining({ body: expect.stringContaining("second answer") })]);
 });
 
-test("a comment on a deleted issue opens a new issue", async () => {
-  const { store, queue, api, issues, comments } = setup();
+test("an edit of a deleted issue opens a new issue", async () => {
+  const { store, queue, api, issues, edits } = setup();
   await turn(store, "first alert", model("first answer"));
   await queue.flush();
   await turn(store, "second alert", model("second answer"));
-  api.fail = (call) => (call === "comment" ? new GoneIssue("410 Gone") : null);
+  api.fail = (call) => (call === "edit" ? new GoneIssue("410 Gone") : null);
   await queue.flush();
 
-  expect(comments).toHaveLength(0);
+  expect(edits).toHaveLength(0);
   expect(issues.map((i) => i.number)).toEqual([1, 2]);
   expect(issues[1]!.body).toContain("second answer");
 });
@@ -290,7 +370,7 @@ function fakeApi() {
     fetch: async (req) => {
       const { pathname } = new URL(req.url);
       const auth = req.headers.get("authorization") ?? "";
-      const body = req.method === "POST" ? await req.json() : null;
+      const body = req.method === "POST" || req.method === "PATCH" ? await req.json() : null;
       seen.push({ method: req.method, path: pathname, auth, body });
       if (/^\/repos\/example-owner\/[\w-]+\/installation$/.test(pathname)) return Response.json({ id: 7 });
       if (pathname === "/app/installations/7/access_tokens") {
@@ -302,7 +382,9 @@ function fakeApi() {
       if (/^\/repos\/example-owner\/[\w-]+\/issues$/.test(pathname) && req.method === "POST") {
         return Response.json({ number: 12 }, { status: 201 });
       }
-      if (pathname.endsWith("/comments")) return Response.json({ id: 1 }, { status: 201 });
+      if (/^\/repos\/example-owner\/[\w-]+\/issues\/\d+$/.test(pathname) && req.method === "PATCH") {
+        return Response.json({ number: Number(pathname.split("/").pop()) });
+      }
       if (pathname === "/repos/example-owner/example-repo/issues") {
         return Response.json([{ number: 9, body: "other" }, { number: 8, body: "x\n<!-- ops-agent:m-1 -->" }]);
       }
@@ -322,7 +404,7 @@ function fakeApi() {
 test("the client signs a JWT as the app and writes with an installation token scoped to the repository", async () => {
   const { api, seen, publicKey } = fakeApi();
   expect(await api.open(REPO, "title", "body")).toBe(12);
-  await api.comment(REPO, 12, "later");
+  await api.edit(REPO, 12, "later");
 
   const lookup = seen.find((s) => s.path.endsWith("/installation"))!;
   const [head, payload, sig] = lookup.auth.replace(/^Bearer /, "").split(".");
@@ -334,9 +416,9 @@ test("the client signs a JWT as the app and writes with an installation token sc
   expect(tokenCalls[0]!.body).toEqual({ repositories: ["example-repo"], permissions: { issues: "write" } });
 
   const writes = seen.filter((s) => s.path.startsWith("/repos/example-owner/example-repo/issues"));
-  expect(writes.map((w) => [w.path, w.auth, w.body])).toEqual([
-    ["/repos/example-owner/example-repo/issues", "Bearer installation-1", { title: "title", body: "body" }],
-    ["/repos/example-owner/example-repo/issues/12/comments", "Bearer installation-1", { body: "later" }],
+  expect(writes.map((w) => [w.method, w.path, w.auth, w.body])).toEqual([
+    ["POST", "/repos/example-owner/example-repo/issues", "Bearer installation-1", { title: "title", body: "body" }],
+    ["PATCH", "/repos/example-owner/example-repo/issues/12", "Bearer installation-1", { body: "later" }],
   ]);
 });
 
@@ -344,7 +426,7 @@ test("each repository's writes use a token scoped to that repository alone", asy
   const { api, seen } = fakeApi();
   await api.open("example-owner/example-apps", "title", "body");
   await api.open("example-owner/example-hosts", "title", "body");
-  await api.comment("example-owner/example-apps", 12, "later");
+  await api.edit("example-owner/example-apps", 12, "later");
 
   const tokenCalls = seen.filter((s) => s.path.endsWith("/access_tokens"));
   expect(tokenCalls.map((t) => t.body)).toEqual([
@@ -355,7 +437,7 @@ test("each repository's writes use a token scoped to that repository alone", asy
   expect(writes.map((w) => [w.path, w.auth])).toEqual([
     ["/repos/example-owner/example-apps/issues", "Bearer installation-1"],
     ["/repos/example-owner/example-hosts/issues", "Bearer installation-2"],
-    ["/repos/example-owner/example-apps/issues/12/comments", "Bearer installation-1"],
+    ["/repos/example-owner/example-apps/issues/12", "Bearer installation-1"],
   ]);
 });
 
@@ -382,9 +464,9 @@ test("GitHub's answers map to refused, gone, or worth a retry", async () => {
   answer(422);
   await expect(api.open(REPO, "t", "b")).rejects.toBeInstanceOf(Refused);
   answer(410);
-  await expect(api.comment(REPO, 1, "b")).rejects.toBeInstanceOf(GoneIssue);
+  await expect(api.edit(REPO, 1, "b")).rejects.toBeInstanceOf(GoneIssue);
   answer(404);
-  await expect(api.comment(REPO, 1, "b")).rejects.toBeInstanceOf(GoneIssue);
+  await expect(api.edit(REPO, 1, "b")).rejects.toBeInstanceOf(GoneIssue);
   for (const [status, headers] of [
     [403, { "x-ratelimit-remaining": "0" }],
     [403, { "retry-after": "60" }],
@@ -399,32 +481,13 @@ test("GitHub's answers map to refused, gone, or worth a retry", async () => {
   }
 });
 
-test("a query whose result was cut at the size limit keeps its time range", async () => {
-  const { store, queue, issues } = setup();
-  const promql_range = readTool({
-    description: "Runs a range query.",
-    input: z.object({ query: z.string(), start: z.string() }),
-    run: async ({ query }) => ({
-      query,
-      start: "2026-10-27T02:30:00.000Z",
-      end: "2026-10-27T03:00:00.000Z",
-      result: Array.from({ length: 2_000 }, (_, i) => ({ labels: { pod: `example-${i}` }, value: "1" })),
-    }),
-  });
-  await turn(store, "alert", model("answer", { tool: "promql_range", input: { query: "up", start: "30m" } }), { promql_range });
-  await queue.flush();
-
-  const query = fenced(issues[0]!.body).find((b) => b.text.includes("promql_range"));
-  expect(query!.text).toContain("2026-10-27T02:30:00.000Z");
-  expect(query!.text).toContain("2026-10-27T03:00:00.000Z");
-});
-
 test("a body stays under GitHub's limit when cleaning lengthens every part, and a token at a cut is still redacted", async () => {
   const { store, queue, issues } = setup();
   const token = `ghp_${"A".repeat(36)}`;
-  const answer = `${"[a](b) <x ".repeat(4_000).slice(0, 39_995)} ${token} ${"[a](b) <x ".repeat(4_000)}`;
-  const alert = "<y ](z ".repeat(5_000);
-  await turn(store, alert, model(answer));
+  // A token where each section would be cut, if the cut ran before cleaning.
+  const filler = (n: number) => "[a](b) <x ".repeat(4_000).slice(0, n);
+  const text = `${filler(14_995)} ${token} ${filler(24_995)} ${token} ${filler(40_000)}`;
+  await turn(store, "alert", model(text, summary(text, text)), summaryTool);
   await queue.flush();
 
   const body = issues[0]!.body;

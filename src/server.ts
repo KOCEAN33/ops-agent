@@ -3,9 +3,9 @@ import { timingSafeEqual } from "node:crypto";
 import { readInstructions, runTurn, type AgentDeps } from "./agent/turn";
 import { parseWebhook } from "./alert";
 import { connect, onMessage, Outbox } from "./owner/discord";
-import { loadConfig, type Config } from "./config";
+import { loadConfig, settingsFromYaml, type Config } from "./config";
 import { gitopsTools } from "./tools/gitops";
-import { githubApi, IssueQueue, issueRepositoryTool } from "./owner/issues";
+import { githubApi, IssueQueue, issueRepositoryTool, issueSummaryTool } from "./owner/issues";
 import { kubeTools } from "./tools/kube";
 import { lokiTools, promTools } from "./tools/query";
 import { TurnQueue } from "./queue";
@@ -89,11 +89,15 @@ async function readTools(c: Config, now: () => Date): Promise<Record<string, Rea
     ...(c.lokiUrl && lokiTools({ url: c.lokiUrl, now })),
     ...(c.gitopsDir && gitopsTools(c.gitopsDir, names)),
     ...(names.length > 0 && issueRepositoryTool(names)),
+    ...issueSummaryTool(),
   };
 }
 
 if (import.meta.main) {
-  const config = loadConfig();
+  // A variable set in the environment, such as on the command line, wins over
+  // the local file.
+  const local = Bun.file("config.yaml");
+  const config = loadConfig({ ...((await local.exists()) ? settingsFromYaml(await local.text()) : {}), ...process.env });
   const store = new Store(config.dbPath);
   const now = () => new Date();
   const agent: AgentDeps = {

@@ -258,6 +258,11 @@ export class Store {
     this.db.query("UPDATE issue_writes SET state = ? WHERE id = ?").run(state, writeId);
   }
 
+  // Whether the session has queued a hand-off, so its issue is open or opening.
+  hasIssue(sessionId: number): boolean {
+    return this.db.query("SELECT 1 FROM issues WHERE session_id = ?").get(sessionId) !== null;
+  }
+
   // Exists for every session with a queued write. repo is null until the
   // session's first write.
   issue(sessionId: number): { marker: string; number: number | null; repo: string | null } {
@@ -287,6 +292,12 @@ export class Store {
     const row = this.db.query<{ k: string }, [number]>("SELECT group_key AS k FROM sessions WHERE id = ?").get(sessionId);
     const [alertname, namespace] = JSON.parse(row!.k);
     return { alertname, namespace };
+  }
+
+  // How many alerts in the session's group fired at its last notification.
+  firingCount(sessionId: number): number {
+    const row = this.db.query<{ f: string }, [number]>("SELECT firing AS f FROM sessions WHERE id = ?").get(sessionId);
+    return JSON.parse(row!.f).length;
   }
 
   thread(sessionId: number): { starterId: string; threadId: string | null } | null {

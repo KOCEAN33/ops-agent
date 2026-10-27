@@ -3,6 +3,7 @@
 Deferred work: each item names what triggers it.
 
 - **Build order**: after the first deployment, the stopgap tools with their RBAC and admission policy. The stopgap tools bring the Write record in `docs/design.md` Shape, with tests that a rerun after a completed autonomous stop stops nothing new and that an approval from an ended turn authorizes nothing. Each step passes the `coding-review` pass that `CLAUDE.md` requires.
+- **Design split by item**: the owner wants `docs/design.md` split into one file per item, and picks when. Keep Chosen, Shape, Threat model and Open findable from one index.
 - **Compaction within a turn**: compaction covers the session's stored history, not the steps of the running turn. If a turn's own tool output passes the turn cap, mask its older results between steps too.
 - **Issue link in Discord**: the thread does not name its issue. If the owner looks the issue up by hand, post its URL in the thread once it opens.
 - **Minimum share measurement**: the 20% minimum share in `docs/design.md` (Autonomous targets) is unmeasured. Before autonomous stops are turned on, have approval-path turns compute and report each candidate's share without stopping, and set the value from what real pressure shows.

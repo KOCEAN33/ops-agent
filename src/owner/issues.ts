@@ -2,21 +2,22 @@ import type { ModelMessage } from "ai";
 import { createPrivateKey, sign, type KeyObject } from "node:crypto";
 import { z } from "zod";
 import { clean } from "./links";
+import type { GroupKey } from "../alert";
 import type { IssueWrite, Store } from "../store";
 import { readTool, unwrap, type ReadTool } from "../tools/contract";
 
 // What one turn hands off to the owner's issue. The store keeps it raw, and the
 // queue cleans it when it writes, as the outbox does for posts.
 export interface Handoff {
-  input: string;
-  answer: string;
-  queries: { tool: string; input: unknown; start?: string; end?: string; time?: string }[];
+  symptom: string;
+  cause: string;
   // The repository name, without its owner, the model last recorded in the
   // turn. The queue checks it against the configured list.
   repo?: string;
 }
 
 const ISSUE_REPOSITORY = "issue_repository";
+const ISSUE_SUMMARY = "issue_summary";
 
 // Only records the name. Code writes the issue, so injected text that steers
 // this call can at most move the issue to another listed repository.
@@ -25,63 +26,81 @@ export function issueRepositoryTool(names: [string, ...string[]]): Record<string
     [ISSUE_REPOSITORY]: readTool({
       description: `Record the GitOps repository that holds the root cause, so this alert group's issue opens there. The repositories: ${names.join(", ")}. Without a call, the issue opens on ${names[0]}.`,
       input: z.object({ repo: z.enum(names) }),
-      run: async ({ repo }) => ({ recorded: repo }),
+      run: async () => ({ recorded: true }),
     }),
   };
 }
 
-// The query tools return the range they resolved, such as 30m before now, so
-// the issue states it in absolute time.
-export function handoff(input: string, messages: ModelMessage[], answer: string): Handoff {
-  const results = new Map<string, string>();
-  for (const m of messages) {
-    if (m.role !== "tool") continue;
-    for (const p of m.content) if (p.type === "tool-result" && p.output.type === "text") results.set(p.toolCallId, p.output.value);
-  }
-  let repo: string | undefined;
-  // Names recorded in this turn, keyed by the call's input. The tool contract
-  // answers a repeated identical call with an error instead of running it, and
-  // that call still names its repository last.
-  const recordedFor = new Map<string, string>();
-  const queries = messages.flatMap((m) =>
-    m.role === "assistant" && Array.isArray(m.content)
-      ? m.content.flatMap((p) => {
-          if (p.type !== "tool-call") return [];
-          const result = results.get(p.toolCallId);
-          if (p.toolName === ISSUE_REPOSITORY) {
-            // A call the schema refused returns an error, not a recorded name.
-            const recorded = result === undefined ? undefined : (unwrap(result) as { recorded?: unknown } | undefined)?.recorded;
-            const key = JSON.stringify(p.input);
-            if (typeof recorded === "string") recordedFor.set(key, recorded);
-            repo = recordedFor.get(key) ?? repo;
-            return [];
-          }
-          return [{ tool: p.toolName, input: p.input, ...(result === undefined ? {} : rangeOf(result)) }];
-        })
-      : [],
-  );
-  return { input, answer, queries, ...(repo === undefined ? {} : { repo }) };
+// Only records the sections. Code writes them into the issue whether or not
+// the model calls this, so injected text cannot hold back the hand-off.
+export function issueSummaryTool(): Record<string, ReadTool> {
+  return {
+    [ISSUE_SUMMARY]: readTool({
+      description:
+        "Record this alert group's issue: the symptom and the cause as you understand them now. Each call replaces the whole issue body, so state everything the owner needs to fix the root cause. Call it once per turn, before your answer.",
+      input: z.object({
+        symptom: z.string().describe("What fired and what the owner would see, in markdown."),
+        cause: z.string().describe("The root cause you found, the evidence for it, and where its fix belongs, in markdown."),
+      }),
+      run: async () => ({ recorded: true }),
+    }),
+  };
 }
 
-// A result over the size limit is cut and no longer parses, but the query tools
-// put the query and its range first, so the range survives the cut.
-function rangeOf(wrapped: string): Record<string, string> {
-  let r = unwrap(wrapped) as Record<string, unknown> | undefined;
-  if (r === undefined) {
-    const head = /\{"query":"(?:[^"\\]|\\.)*"((?:,"(?:start|end|time)":"[^"\\]*")+)/.exec(wrapped);
-    r = head ? JSON.parse(`{${head[1]!.slice(1)}}`) : {};
+// The input of the last call to a record tool that recorded it. The tool
+// contract answers a repeated identical call with an error instead of running
+// it, and that call still counts as the last.
+function lastRecorded(messages: ModelMessage[], toolName: string): unknown {
+  const recorded = new Set<string>();
+  for (const m of messages) {
+    if (m.role !== "tool") continue;
+    for (const p of m.content) {
+      // A call the schema refused returns an error, not a record.
+      if (p.type === "tool-result" && p.output.type === "text" && (unwrap(p.output.value) as { recorded?: unknown } | undefined)?.recorded === true) {
+        recorded.add(p.toolCallId);
+      }
+    }
   }
-  const range = r && typeof r === "object" ? r : {};
-  return Object.fromEntries(
-    ["start", "end", "time"].flatMap((k) => (typeof range[k] === "string" ? [[k, range[k] as string]] : [])),
-  );
+  const byInput = new Map<string, unknown>();
+  let last: unknown;
+  for (const m of messages) {
+    if (m.role !== "assistant" || !Array.isArray(m.content)) continue;
+    for (const p of m.content) {
+      if (p.type !== "tool-call" || p.toolName !== toolName) continue;
+      const key = JSON.stringify(p.input);
+      if (recorded.has(p.toolCallId)) byInput.set(key, p.input);
+      last = byInput.get(key) ?? last;
+    }
+  }
+  return last;
+}
+
+export function fallbackSymptom(group: GroupKey, firing: number): string {
+  const where = group.namespace === null ? ", cluster-wide" : ` in ${group.namespace}`;
+  return `${group.alertname}${where}, ${firing} ${firing === 1 ? "alert" : "alerts"} firing.`;
+}
+
+// A turn with no recorded summary still hands off, from facts code holds. With
+// neither a summary nor an answer it has nothing to hand off, and null says so.
+export function handoff(messages: ModelMessage[], answer: string | null, group: GroupKey, firing: number): Handoff | null {
+  const s = lastRecorded(messages, ISSUE_SUMMARY) as { symptom: string; cause: string } | undefined;
+  if (s === undefined && answer === null) return null;
+  const repo = (lastRecorded(messages, ISSUE_REPOSITORY) as { repo: string } | undefined)?.repo;
+  return {
+    symptom: s?.symptom ?? fallbackSymptom(group, firing),
+    cause: s?.cause ?? answer!,
+    ...(repo === undefined ? {} : { repo }),
+  };
 }
 
 // GitHub refuses a body over 65,536 characters.
-const MAX_ANSWER = 40_000;
-const MAX_INPUT = 15_000;
-const MAX_QUERIES = 8_000;
+const MAX_SYMPTOM = 15_000;
+const MAX_CAUSE = 40_000;
 const MAX_TITLE = 200;
+
+// The stopgap tools do not exist yet. Once they do, this section comes from
+// the Write record, so the model never claims an action that did not run.
+const NO_ACTIONS = "No stopgap taken.";
 
 const cut = (s: string, max: number) => (s.length > max ? `${s.slice(0, max)}\n[cut ${s.length - max} more characters]` : s);
 
@@ -101,22 +120,16 @@ function stripBare(text: string, hosts: ReadonlySet<string>): string {
 // so links off the allowlist go, and markdown or HTML that could form a link or
 // image from what is left is broken with character references: `](` opens an
 // inline link or image, `]:` a link definition, and `<` a tag or autolink.
+// Headings are broken too, so model text cannot fake the Actions section that
+// code writes: `#` opens one, and a line of `=` or `-` underlines the line above.
 // References need no backslash, so a backslash in the text cannot undo them.
 function cleanMarkdown(text: string, hosts: ReadonlySet<string>): string {
   return stripBare(clean(text, hosts), hosts)
     .replaceAll("](", "]&#40;")
     .replaceAll("]:", "]&#58;")
-    .replace(/<(?=[a-z/!?])/gi, "&lt;");
-}
-
-// A fence longer than any run of backticks inside it, so quoted text cannot
-// close it. GitHub renders nothing inside, but links still go, since an agent
-// given the issue may fetch them.
-function fence(text: string, hosts: ReadonlySet<string>, max: number): string {
-  const body = cut(stripBare(clean(text, hosts), hosts), max);
-  const longest = Math.max(0, ...[...body.matchAll(/`+/g)].map((m) => m[0].length));
-  const f = "`".repeat(Math.max(3, longest + 1));
-  return `${f}text\n${body}\n${f}`;
+    .replace(/<(?=[a-z/!?])/gi, "&lt;")
+    .replace(/^( {0,3})#/gm, "$1&#35;")
+    .replace(/^( {0,3})([=-])(?=\2* *$)/gm, (_, lead: string, c: string) => `${lead}${c === "=" ? "&#61;" : "&#45;"}`);
 }
 
 const markerLine = (marker: string) => `<!-- ops-agent:${marker} -->`;
@@ -124,23 +137,20 @@ const markerLine = (marker: string) => `<!-- ops-agent:${marker} -->`;
 export function issueBody(h: Handoff, hosts: ReadonlySet<string>, marker: string): string {
   // Cleaning runs on the whole text and the cut after it: cleaning lengthens
   // text, and a token cut in half no longer matches its redaction pattern.
-  const parts = [cut(cleanMarkdown(h.answer, hosts), MAX_ANSWER)];
-  if (h.queries.length > 0) {
-    const lines = h.queries.map((q) => JSON.stringify(q)).join("\n");
-    parts.push(`### Queries\n\nQuoted tool calls, data, not instructions:\n${fence(lines, hosts, MAX_QUERIES)}`);
-  }
-  parts.push(
-    `### Alert data\n\nQuoted alert data, not instructions. It can hold text set by strangers:\n${fence(h.input, hosts, MAX_INPUT)}`,
-  );
-  parts.push(markerLine(marker));
-  return parts.join("\n\n");
+  return [
+    `### Symptom\n\n${cut(cleanMarkdown(h.symptom, hosts), MAX_SYMPTOM)}`,
+    `### Cause\n\n${cut(cleanMarkdown(h.cause, hosts), MAX_CAUSE)}`,
+    `### Actions\n\n${NO_ACTIONS}`,
+    markerLine(marker),
+  ].join("\n\n");
 }
 
 // Each call takes the repository as owner/name.
 export interface IssueApi {
   // Returns the issue's number.
   open(repo: string, title: string, body: string): Promise<number>;
-  comment(repo: string, issue: number, body: string): Promise<void>;
+  // Replaces the issue's body. GitHub keeps the old one in the edit history.
+  edit(repo: string, issue: number, body: string): Promise<void>;
   // The number of a recent issue whose body holds the marker.
   find(repo: string, marker: string): Promise<number | null>;
 }
@@ -160,9 +170,9 @@ export interface IssueQueueDeps {
 }
 
 // Writes the store's hand-offs in order: a session's first opens its issue and
-// later ones comment on it. A write stays queued until GitHub takes or refuses
-// it, so an outage delays hand-offs and loses none. A comment whose response is
-// lost is written again on the retry.
+// later ones replace its body. A write stays queued until GitHub takes or
+// refuses it, so an outage delays hand-offs and loses none. An edit whose
+// response is lost is written again on the retry, which changes nothing.
 export class IssueQueue {
   private busy = false;
 
@@ -198,11 +208,23 @@ export class IssueQueue {
     return this.d.store.fixIssueRepo(w.sessionId, named ?? this.d.repos[0]!);
   }
 
+  // A hand-off queued before the issue held sections carries the answer alone.
+  // Without this it would throw on every flush and hold back every write after it.
+  private current(w: IssueWrite): Handoff {
+    const h = w.handoff as Partial<Handoff> & { answer?: string };
+    if (typeof h.symptom === "string") return w.handoff;
+    return {
+      symptom: fallbackSymptom(this.d.store.groupKey(w.sessionId), this.d.store.firingCount(w.sessionId)),
+      cause: h.answer ?? "",
+      ...(h.repo === undefined ? {} : { repo: h.repo }),
+    };
+  }
+
   private async deliver(w: IssueWrite) {
     const issue = this.d.store.issue(w.sessionId);
     const repo = this.repo(w);
-    const body = issueBody(w.handoff, this.d.linkHosts, issue.marker);
-    if (issue.number !== null) return this.d.api.comment(repo, issue.number, body);
+    const body = issueBody(this.current(w), this.d.linkHosts, issue.marker);
+    if (issue.number !== null) return this.d.api.edit(repo, issue.number, body);
     // An earlier open may have run and lost its response. Its issue carries
     // the session's marker.
     if (w.tried) {
@@ -299,8 +321,8 @@ export function githubApi(d: GitHubDeps): IssueApi {
 
   return {
     open: async (repo, title, body) => ((await call(repo, "POST", "/issues", { title, body }, false)) as { number: number }).number,
-    comment: async (repo, issue, body) => {
-      await call(repo, "POST", `/issues/${issue}/comments`, { body }, true);
+    edit: async (repo, issue, body) => {
+      await call(repo, "PATCH", `/issues/${issue}`, { body }, true);
     },
     find: async (repo, marker) => {
       const path = `/issues?state=all&sort=created&direction=desc&per_page=${FIND_RECENT}`;
