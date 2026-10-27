@@ -106,9 +106,9 @@ if (import.meta.main) {
     turnCapUsd: config.turnCapUsd,
     monthlyCapUsd: config.monthlyCapUsd,
     store,
-    instructions: async () => {
+    instructions: async (alertname) => {
       if (!config.instructionsDir) return "";
-      const text = await readInstructions(config.instructionsDir);
+      const text = await readInstructions(config.instructionsDir, alertname);
       if (text !== null) return text;
       // A missing clone would otherwise fail every turn. The turn runs on the
       // base instructions, and the owner hears of it once a day.

@@ -38,7 +38,7 @@ export interface AgentDeps {
   turnCapUsd: number;
   monthlyCapUsd: number;
   store: Store;
-  instructions: () => Promise<string>;
+  instructions: (alertname: string) => Promise<string>;
   now: () => Date;
   // Fixed for the process's life, so a session sees the same tools each turn.
   tools: Record<string, ReadTool>;
@@ -168,7 +168,7 @@ export async function runTurn(
     const past = await history(d.store, turn.sessionId, d.compaction, summarize);
     result = await generateText({
       model,
-      instructions: [BASE_INSTRUCTIONS, await d.instructions()].filter(Boolean).join("\n\n"),
+      instructions: [BASE_INSTRUCTIONS, await d.instructions(d.store.groupKey(turn.sessionId).alertname)].filter(Boolean).join("\n\n"),
       messages: [...past, user],
       tools,
       maxOutputTokens: MAX_OUTPUT_TOKENS,
@@ -203,12 +203,17 @@ export async function runTurn(
   return { text: result.text };
 }
 
-// Every markdown file in the operating instructions clone except its README,
-// read on each turn so a new commit applies without a restart. Null while the
-// clone is missing, such as before git-sync's first sync.
-export async function readInstructions(dir: string): Promise<string | null> {
+// Every markdown file in the operating instructions clone except its README and
+// the runbooks, plus the runbook named after the alert group's alertname. Read
+// on each turn so a new commit applies without a restart. Null while the clone
+// is missing, such as before git-sync's first sync. The alertname is stranger
+// text, so it only picks among the scanned names and never builds a path.
+export async function readInstructions(dir: string, alertname: string): Promise<string | null> {
   if (!existsSync(dir)) return null;
-  const files = [...new Bun.Glob("**/*.md").scanSync(dir)].filter((f) => f !== "README.md").sort();
+  const runbook = `runbooks/${alertname}.md`;
+  const files = [...new Bun.Glob("**/*.md").scanSync(dir)]
+    .filter((f) => f !== "README.md" && (!f.startsWith("runbooks/") || f === runbook))
+    .sort();
   const texts = await Promise.all(files.map((f) => Bun.file(`${dir}/${f}`).text()));
   return texts.join("\n\n");
 }

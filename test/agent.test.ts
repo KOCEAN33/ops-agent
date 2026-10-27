@@ -94,6 +94,16 @@ test("a later turn carries the session's earlier messages", async () => {
   ]);
 });
 
+test("the system prompt carries the instructions for the session's alertname", async () => {
+  const m = model(() => "ok");
+  const d = deps(m, { instructions: async (alertname) => `runbook for ${alertname}` });
+
+  await runTurn(d, notify(d.store, { alertname: "KubeJobFailed", namespace: "example-app" }, "alert"));
+
+  const system = m.doGenerateCalls[0]!.prompt.find((p) => p.role === "system");
+  expect(system?.content).toContain("runbook for KubeJobFailed");
+});
+
 test("once the month's spend reaches the cap, no model call is made", async () => {
   // One turn costs 1.0 * 3 + 0.5 * 15 = 10.5 USD, over a 10 USD monthly cap.
   const m = model(() => "ok", { noCache: 1_000_000, output: 500_000 });
@@ -259,13 +269,19 @@ test("a turn ended by its spend cap still tells the owner", async () => {
   expect(d.store.nextPost()?.text).toContain("spend");
 });
 
-test("instructions are every markdown file but the README, and a missing clone reads as null", async () => {
+test("instructions are every markdown file but the README and the other alerts' runbooks", async () => {
   const dir = mkdtempSync(join(tmpdir(), "ops-agent-instructions-"));
+  mkdirSync(join(dir, "core"));
   mkdirSync(join(dir, "runbooks"));
   writeFileSync(join(dir, "README.md"), "readme");
-  writeFileSync(join(dir, "a.md"), "first");
-  writeFileSync(join(dir, "runbooks", "b.md"), "second");
-  expect(await readInstructions(dir)).toBe("first\n\nsecond");
+  writeFileSync(join(dir, "core", "a.md"), "core");
+  writeFileSync(join(dir, "runbooks", "KubeJobFailed.md"), "job runbook");
+  writeFileSync(join(dir, "runbooks", "NodeDown.md"), "node runbook");
+  expect(await readInstructions(dir, "KubeJobFailed")).toBe("core\n\njob runbook");
+  expect(await readInstructions(dir, "NoRunbook")).toBe("core");
+  // An alertname is stranger text, so it never reaches a file by path.
+  expect(await readInstructions(dir, "../README")).toBe("core");
+  expect(await readInstructions(dir, "../core/a")).toBe("core");
   // git-sync creates its link only after the first sync.
-  expect(await readInstructions(join(dir, "current"))).toBeNull();
+  expect(await readInstructions(join(dir, "current"), "KubeJobFailed")).toBeNull();
 });
