@@ -10,8 +10,9 @@ const OWNER = "200";
 function fakeDiscord() {
   const threads: { channelId: string; messageId: string; name: string }[] = [];
   const sent: { channelId: string; message: Message }[] = [];
+  const archived: string[] = [];
   const api = {
-    fail: null as null | ((call: "open" | "send", channelId: string) => Error | null),
+    fail: null as null | ((call: "open" | "send" | "archive", channelId: string) => Error | null),
     async openThread(channelId: string, messageId: string, name: string) {
       const e = api.fail?.("open", channelId);
       if (e) throw e;
@@ -25,10 +26,15 @@ function fakeDiscord() {
       return `msg-${sent.length}`;
     },
     async typing() {},
+    async archive(threadId: string) {
+      const e = api.fail?.("archive", threadId);
+      if (e) throw e;
+      archived.push(threadId);
+    },
   } satisfies DiscordApi & { fail: unknown };
   // Messages posted in threads, leaving out starter messages in the channel.
   const inThreads = () => sent.filter((s) => s.channelId !== CHANNEL).map((s) => [s.channelId, s.message.content]);
-  return { api, threads, sent, inThreads };
+  return { api, threads, sent, archived, inThreads };
 }
 
 let fingerprint = 0;
@@ -202,6 +208,51 @@ test("a post without a session goes to the channel", async () => {
   expect(sent).toEqual([expect.objectContaining({ channelId: CHANNEL, message: expect.objectContaining({ content: "notice" }) })]);
 });
 
+// Ends the group's turn for a notification with no firing alerts left.
+function resolve(store: Store, key: { alertname: string; namespace: string | null }, text: string) {
+  const { turnId } = store.noteFiring(key, [], "resolved");
+  store.endTurn(turnId!, "done", [], text);
+}
+
+test("a thread stays open while its group fires and is archived once the resolved group's post is sent", async () => {
+  const { store, outbox, threads, archived, inThreads } = setup();
+  post(store, key, "firing");
+  await outbox.flush();
+  expect(archived).toEqual([]);
+
+  resolve(store, key, "resolved");
+  await outbox.flush();
+  const thread = threads[0]!.messageId;
+  expect(inThreads()).toEqual([
+    [thread, "firing"],
+    [thread, "resolved"],
+  ]);
+  expect(archived).toEqual([thread]);
+});
+
+test("a resolved group's thread is archived only after its post is sent", async () => {
+  const { store, outbox, api, archived } = setup();
+  post(store, key, "firing");
+  await outbox.flush();
+  resolve(store, key, "resolved");
+  api.fail = (call) => (call === "send" ? new Error("connect ECONNREFUSED") : null);
+  await outbox.flush();
+  expect(archived).toEqual([]);
+});
+
+test("a failed archive is ignored, and the posts behind it go out", async () => {
+  const { store, outbox, api, archived, inThreads } = setup();
+  post(store, key, "firing");
+  resolve(store, key, "resolved");
+  post(store, { alertname: "NodeDiskPressure", namespace: null }, "other");
+  api.fail = (call) => (call === "archive" ? new Error("503 Service Unavailable") : null);
+  await outbox.flush();
+  api.fail = null;
+  await outbox.flush();
+  expect(inThreads().map(([, c]) => c)).toEqual(["firing", "resolved", "other"]);
+  expect(archived).toEqual([]);
+});
+
 async function threadOf(store: Store) {
   const discord = fakeDiscord();
   post(store, key, "answer");
@@ -235,7 +286,7 @@ test("a message from anyone but the owner, or outside an alert's thread, queues 
 
 test("whileTyping shows typing at once and then every interval until the work ends", async () => {
   const calls: string[] = [];
-  const api = { openThread: async () => "", send: async () => "", typing: async (c: string) => void calls.push(c) } satisfies DiscordApi;
+  const api = { openThread: async () => "", send: async () => "", archive: async () => {}, typing: async (c: string) => void calls.push(c) } satisfies DiscordApi;
   const out = await whileTyping(api, "thread-1", () => Bun.sleep(110).then(() => "answer"), 40);
   expect(out).toBe("answer");
   // At 0, 40 and 80 ms.
@@ -245,7 +296,7 @@ test("whileTyping shows typing at once and then every interval until the work en
 });
 
 test("whileTyping ignores a failed typing call and passes the work's failure through", async () => {
-  const api = { openThread: async () => "", send: async () => "", typing: async () => { throw new Refused("missing access"); } } satisfies DiscordApi;
+  const api = { openThread: async () => "", send: async () => "", archive: async () => {}, typing: async () => { throw new Refused("missing access"); } } satisfies DiscordApi;
   expect(await whileTyping(api, "thread-1", () => Bun.sleep(30).then(() => "answer"), 10)).toBe("answer");
   expect(whileTyping(api, "thread-1", () => Promise.reject(new Error("model down")), 10)).rejects.toThrow("model down");
 });

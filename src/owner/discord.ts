@@ -1,4 +1,4 @@
-import { Client, GatewayDispatchEvents, GatewayIntentBits, MessageFlags, RESTJSONErrorCodes } from "@discordjs/core";
+import { Client, GatewayDispatchEvents, GatewayIntentBits, MessageFlags, RESTJSONErrorCodes, ThreadAutoArchiveDuration } from "@discordjs/core";
 import { DiscordAPIError, REST } from "@discordjs/rest";
 import { WebSocketManager, WebSocketShardEvents } from "@discordjs/ws";
 import { clean } from "./links";
@@ -18,6 +18,9 @@ export interface DiscordApi {
   send(channelId: string, message: Message): Promise<string>;
   // Shows the bot typing in the channel for 10 seconds, or until it sends.
   typing(channelId: string): Promise<void>;
+  // Hides the thread from the channel's open thread list. Any new message in
+  // it, the owner's or the bot's, unarchives it.
+  archive(threadId: string): Promise<void>;
 }
 
 // Discord refused the request for good, so sending it again changes nothing.
@@ -75,6 +78,7 @@ export class Outbox {
         try {
           await this.deliver(post);
           this.d.store.postSent(post.id);
+          if (post.sessionId !== null && this.d.store.firingCount(post.sessionId) === 0) await this.archive(post.sessionId);
         } catch (e) {
           console.error(JSON.stringify({ msg: "discord post failed", postId: post.id, error: String(e) }));
           // A lost thread is replaced by a new one. A lost channel is a
@@ -99,6 +103,16 @@ export class Outbox {
       await this.d.api.send(channel, message(parts[i]!));
       this.d.store.postProgress(post.id, i + 1);
     }
+  }
+
+  // A resolved group's thread drops out of the open thread list. Archiving is
+  // a courtesy, like typing, so a failed call is logged and ignored.
+  private async archive(sessionId: number) {
+    const threadId = this.d.store.thread(sessionId)?.threadId;
+    if (!threadId) return;
+    await this.d.api.archive(threadId).catch((e) =>
+      console.error(JSON.stringify({ msg: "discord archive failed", sessionId, error: String(e) })),
+    );
   }
 
   private async thread(sessionId: number): Promise<string> {
@@ -201,7 +215,9 @@ export function connect(token: string, onMessage: (m: { channelId: string; autho
     openThread: (channelId, messageId, name) =>
       call(async () => {
         try {
-          return (await client.api.channels.createThread(channelId, { name }, messageId)).id;
+          // A group whose resolve never arrives drops out after 3 quiet days.
+          const body = { name, auto_archive_duration: ThreadAutoArchiveDuration.ThreeDays };
+          return (await client.api.channels.createThread(channelId, body, messageId)).id;
         } catch (e) {
           // An earlier attempt opened it, and the process died before
           // recording it.
@@ -211,5 +227,6 @@ export function connect(token: string, onMessage: (m: { channelId: string; autho
       }),
     send: (channelId, msg) => call(async () => (await client.api.channels.createMessage(channelId, msg)).id),
     typing: (channelId) => client.api.channels.showTyping(channelId),
+    archive: async (threadId) => void (await client.api.channels.edit(threadId, { archived: true })),
   };
 }
