@@ -56,20 +56,25 @@ function turn(d: AgentDeps) {
   return { id: turnId!, sessionId, text: "alert" };
 }
 
+// What the counters say was charged: reserved less refunded.
+function charged(text: string): number {
+  return sample(text, 'ops_agent_spend_reserved_usd_total{model="example-model"}')! - sample(text, 'ops_agent_spend_refunded_usd_total{model="example-model"}')!;
+}
+
 // The value of one sample in the text format, or undefined when absent.
 function sample(text: string, series: string): number | undefined {
   const line = text.split("\n").find((l) => l.startsWith(`${series} `));
   return line === undefined ? undefined : Number(line.slice(series.length + 1));
 }
 
-test("a done turn adds its reported cost to the spend counter and observes its spend, tokens and tool calls", async () => {
+test("a done turn's counters net to its reported cost, and it observes its spend, tokens and tool calls", async () => {
   // Two calls, each 1,000,000 input tokens at 3 USD and 100,000 output tokens
   // at 15 USD: 4.5 USD a call, 9 USD for the turn.
   const d = deps(model(usage(1_000_000, 100_000)));
   await runTurn(d, turn(d));
   const t = d.metrics.text();
 
-  expect(sample(t, 'ops_agent_spend_usd_total{model="example-model"}')).toBeCloseTo(9, 9);
+  expect(charged(t)).toBeCloseTo(9, 9);
   expect(sample(t, 'ops_agent_turns_total{end="done"}')).toBe(1);
   expect(sample(t, 'ops_agent_tool_calls_total{tool="probe"}')).toBe(1);
   expect(sample(t, 'ops_agent_turn_spend_usd_count{model="example-model"}')).toBe(1);
@@ -92,7 +97,7 @@ test("a turn the monthly cap defers counts as monthly-cap and observes no turn s
   expect(sample(t, 'ops_agent_turn_spend_usd_count{model="example-model"}')).toBeUndefined();
 });
 
-test("an attempt that throws counts as failed, and a call that may have run stays in the spend counter", async () => {
+test("an attempt that throws counts as failed, and a call that may have run stays charged in the counters", async () => {
   const m = new MockLanguageModelV4({
     modelId: "example-model",
     // No status and not retryable: the call may have run, and the SDK does
@@ -107,7 +112,7 @@ test("an attempt that throws counts as failed, and a call that may have run stay
 
   expect(sample(t, 'ops_agent_turns_total{end="failed"}')).toBe(1);
   // The store keeps each failed call's worst case, and the counter matches it.
-  expect(sample(t, 'ops_agent_spend_usd_total{model="example-model"}')).toBeCloseTo(d.store.monthSpend("2026-10"), 9);
+  expect(charged(t)).toBeCloseTo(d.store.monthSpend("2026-10"), 9);
   expect(d.store.monthSpend("2026-10")).toBeGreaterThan(0);
 });
 
@@ -130,4 +135,20 @@ test("a histogram bucket counts a value equal to its bound, as Prometheus's le d
   const t = m.text();
   expect(sample(t, 'ops_agent_turn_spend_usd_bucket{model="example-model",le="0.02"}')).toBe(0);
   expect(sample(t, 'ops_agent_turn_spend_usd_bucket{model="example-model",le="0.05"}')).toBe(1);
+});
+
+test("a call's worst case is counted before the call runs, so a crash during it stays counted as the store keeps it", async () => {
+  let during: { reserved?: number; month: number } | undefined;
+  const d: AgentDeps = deps(
+    new MockLanguageModelV4({
+      modelId: "example-model",
+      doGenerate: async () => {
+        during = { reserved: sample(d.metrics.text(), 'ops_agent_spend_reserved_usd_total{model="example-model"}'), month: d.store.monthSpend("2026-10") };
+        return { content: [{ type: "text", text: "done" }], finishReason: { unified: "stop", raw: "end_turn" }, usage: usage(0, 0), warnings: [] };
+      },
+    }),
+  );
+  await runTurn(d, turn(d));
+  expect(during!.month).toBeGreaterThan(0);
+  expect(during!.reserved).toBeCloseTo(during!.month, 9);
 });

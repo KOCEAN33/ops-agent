@@ -138,6 +138,7 @@ async function attempt(
         lastWorst = worst;
         const reserved = d.store.reserve(month, turn.id, worst, d.turnCapUsd, d.monthlyCapUsd);
         if (reserved !== "ok") throw new OverBudget(reserved);
+        d.metrics.spendReserved.inc({ model: d.model.modelId }, worst);
         let actual = worst;
         try {
           const result = await doGenerate();
@@ -153,7 +154,7 @@ async function attempt(
           throw e;
         } finally {
           d.store.settle(month, turn.id, actual - worst);
-          d.metrics.spend.inc({ model: d.model.modelId }, actual);
+          d.metrics.spendRefunded.inc({ model: d.model.modelId }, worst - actual);
         }
       },
     },

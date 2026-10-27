@@ -68,10 +68,13 @@ class Histogram {
 }
 
 export class Metrics {
-  // What the store charges: a call's reported cost, or its worst case when
-  // the call may have run unreported. The month's spend is increase() over
-  // it, which absorbs a restart's reset.
-  readonly spend = new Counter("ops_agent_spend_usd_total", "Model spend in USD, as charged against the caps.");
+  // The store charges a call's worst case before it runs and refunds the
+  // difference after, so reserved less refunded is what it charged, even for
+  // a call a crash cut. A series born mid-month loses the value of its first
+  // scrape to increase(), so a month's spend is read per series from its
+  // values, not with increase() (docs/design.md, Spend seed).
+  readonly spendReserved = new Counter("ops_agent_spend_reserved_usd_total", "Model spend reserved before each call, in USD.");
+  readonly spendRefunded = new Counter("ops_agent_spend_refunded_usd_total", "Reserved model spend refunded after each call, in USD.");
   readonly turns = new Counter("ops_agent_turns_total", "Turn attempts by how they ended.");
   readonly toolCalls = new Counter("ops_agent_tool_calls_total", "Tool calls by tool.");
   // Observed when a turn ends, done or stopped by its cap. Spend covers every
@@ -82,7 +85,7 @@ export class Metrics {
   readonly turnOutputTokens = new Histogram("ops_agent_turn_output_tokens", "Output tokens of a turn's last attempt.", [100, 200, 500, 1e3, 2e3, 5e3, 1e4, 2e4, 5e4]);
 
   text(): string {
-    const all = [this.spend, this.turns, this.toolCalls, this.turnSpend, this.turnSeconds, this.turnInputTokens, this.turnOutputTokens];
+    const all = [this.spendReserved, this.spendRefunded, this.turns, this.toolCalls, this.turnSpend, this.turnSeconds, this.turnInputTokens, this.turnOutputTokens];
     return `${all.map((m) => m.text()).join("\n")}\n`;
   }
 }

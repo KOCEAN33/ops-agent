@@ -180,10 +180,13 @@ if (import.meta.main) {
   });
   console.log(`listening on ${server.url}`);
   if (config.metricsPort !== null) {
-    // A series that first appears with a value loses that value to increase(),
-    // so the counters start at zero.
-    agent.metrics.spend.inc({ model: agent.model.modelId }, 0);
+    // Every known series shows from the first scrape, so a dashboard's rate()
+    // sees its first change. A turn can still settle before that scrape.
+    const model = { model: agent.model.modelId };
+    agent.metrics.spendReserved.inc(model, 0);
+    agent.metrics.spendRefunded.inc(model, 0);
     for (const end of ["done", "budget", "monthly-cap", "failed"] as const) agent.metrics.turns.inc({ end }, 0);
+    for (const tool of Object.keys(agent.tools)) agent.metrics.toolCalls.inc({ tool }, 0);
     const m = Bun.serve({ port: config.metricsPort, fetch: metricsHandler(agent.metrics) });
     console.log(`metrics on ${m.url}`);
   }
