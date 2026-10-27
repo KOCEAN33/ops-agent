@@ -116,6 +116,15 @@ metrics:
     # Such as the label the Prometheus resource's podMonitorSelector matches.
     labels: {}
     interval: 30s
+  # A ConfigMap holding a Grafana dashboard of the metrics, for a Grafana
+  # sidecar that loads ConfigMaps by label. Enable it on one release: the
+  # dashboard's uid is fixed, and its job variable lists every release.
+  dashboard:
+    enabled: false
+    labels:
+      grafana_dashboard: "1"
+    # Such as the sidecar's folder annotation.
+    annotations: {}
 
 # Egress through the CNI's FQDN rules. Off, egress is not limited.
 ciliumEgress:

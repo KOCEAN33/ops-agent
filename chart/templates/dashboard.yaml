@@ -1,0 +1,18 @@
+{{- with .Values.metrics.dashboard }}
+{{- if .enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "ops-agent.fullname" $ }}-dashboard
+  labels:
+    {{- include "ops-agent.labels" $ | nindent 4 }}
+    {{- toYaml .labels | nindent 4 }}
+  {{- with .annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+data:
+  ops-agent.json: |
+    {{- $.Files.Get "dashboards/ops-agent.json" | nindent 4 }}
+{{- end }}
+{{- end }}

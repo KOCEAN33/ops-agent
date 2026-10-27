@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Metrics } from "../src/metrics";
 
 const CHART = join(import.meta.dir, "..", "chart");
 const helm = Bun.which("helm");
@@ -247,4 +248,19 @@ test.skipIf(!helm)("a half Discord configuration fails the render", () => {
   const { docs, error } = render({ ...example, discord: { channelId: "100" } });
   expect(docs).toEqual([]);
   expect(error).toContain("discord.ownerId");
+});
+
+test.skipIf(!helm)("an enabled dashboard is a ConfigMap the sidecar loads, whose agent queries name only exported metrics", () => {
+  expect(render(example).docs.filter((d) => d.kind === "ConfigMap")).toEqual([]);
+  const { docs } = render({ ...example, metrics: { dashboard: { enabled: true, annotations: { grafana_folder: "Example" } } } });
+  const cm = one(docs, "ConfigMap");
+  expect(cm.metadata.labels).toEqual(expect.objectContaining({ grafana_dashboard: "1" }));
+  expect((cm.metadata as any).annotations).toEqual({ grafana_folder: "Example" });
+  const dashboard = JSON.parse(cm.data["ops-agent.json"]);
+  const exprs: string[] = dashboard.panels.flatMap((p: any) => (p.targets ?? []).map((t: any) => t.expr));
+  const exported = new Set([...new Metrics().text().matchAll(/^# TYPE (\S+) (\S+)/gm)].flatMap(([, name, type]) =>
+    type === "histogram" ? [`${name}_bucket`, `${name}_sum`, `${name}_count`] : [name!]));
+  const used = exprs.flatMap((e) => e.match(/ops_agent_\w+/g) ?? []);
+  expect(used.length).toBeGreaterThan(0);
+  for (const name of used) expect(exported).toContain(name);
 });
