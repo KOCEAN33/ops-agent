@@ -6,6 +6,7 @@ import { z } from "zod";
 import { runTurn, type AgentDeps } from "../src/agent/turn";
 import { GoneIssue, githubApi, IssueQueue, issueRepositoryTool, issueSummaryTool, Refused, type Handoff, type IssueApi } from "../src/owner/issues";
 import { Metrics } from "../src/metrics";
+import { Outbox, type DiscordApi } from "../src/owner/discord";
 import { Store } from "../src/store";
 import { readTool, type ReadTool } from "../src/tools/contract";
 
@@ -105,7 +106,7 @@ const recordTool = issueRepositoryTool(["example-apps", "example-platform", "exa
 const name = (repo: string) => ({ tool: "issue_repository", input: { repo } });
 
 const summaryTool = issueSummaryTool();
-const summary = (symptom: string, cause: string) => ({ tool: "issue_summary", input: { symptom, cause } });
+const summary = (symptom: string, cause: string, title = "example title") => ({ tool: "issue_summary", input: { title, symptom, cause } });
 
 // The text under each `### ` heading of an issue body, keyed by the heading.
 function sections(body: string): Record<string, string> {
@@ -126,6 +127,33 @@ test("the issue holds the symptom and cause the model recorded, and no stopgap w
     Cause: "The job ran out of memory.",
     Actions: "No stopgap taken.",
   });
+});
+
+test("the title the model recorded in the first turn names the alert's Discord thread", async () => {
+  const { store } = setup();
+  const names: string[] = [];
+  const discord: DiscordApi = {
+    openThread: async (_channel, message, name) => (names.push(name), message),
+    send: async (_channel, m) => (names.length === 0 && names.push(`starter: ${m.content}`), "msg"),
+    typing: async () => {},
+    archive: async () => {},
+  };
+  await turn(store, "alert", model("answer", summary("symptom", "cause", "backup job runs out of memory")), summaryTool);
+  await new Outbox({ store, api: discord, channelId: "100", linkHosts: new Set() }).flush();
+
+  expect(names).toEqual([
+    "starter: KubeJobFailed / example-app: backup job runs out of memory",
+    "KubeJobFailed / example-app: backup job runs out of memory",
+  ]);
+});
+
+test("a summary without a title is refused", async () => {
+  const { store, queue, issues } = setup();
+  const untitled = { tool: "issue_summary", input: { symptom: "untitled symptom", cause: "untitled cause" } };
+  await turn(store, "alert", model("answer", untitled), summaryTool);
+  await queue.flush();
+
+  expect(sections(issues[0]!.body).Cause).toBe("answer");
 });
 
 test("a later turn replaces the issue's body instead of adding to it", async () => {

@@ -9,6 +9,8 @@ import { readTool, unwrap, type ReadTool } from "../tools/contract";
 // What one turn hands off to the owner's issue. The store keeps it raw, and the
 // queue cleans it when it writes, as the outbox does for posts.
 export interface Handoff {
+  // Names the alert group's Discord thread when it opens.
+  title?: string;
   symptom: string;
   cause: string;
   // The repository name, without its owner, the model last recorded in the
@@ -37,8 +39,9 @@ export function issueSummaryTool(): Record<string, ReadTool> {
   return {
     [ISSUE_SUMMARY]: readTool({
       description:
-        "Record this alert group's issue: the symptom and the cause as you understand them now. Each call replaces the whole issue body, so state everything the owner needs to fix the root cause. Call it once per turn, before your answer.",
+        "Record this alert group's issue: a title, the symptom and the cause as you understand them now. Each call replaces the whole issue body, so state everything the owner needs to fix the root cause. Call it once per turn, before your answer.",
       input: z.object({
+        title: z.string().describe("The problem behind the alert in a few words, such as which workload fails and how. It names the alert's Discord thread, so the owner can tell threads apart later."),
         symptom: z.string().describe("What fired and what the owner would see, in markdown."),
         cause: z.string().describe("The root cause you found, the evidence for it, and where its fix belongs, in markdown."),
       }),
@@ -83,10 +86,11 @@ export function fallbackSymptom(group: GroupKey, firing: number): string {
 // A turn with no recorded summary still hands off, from facts code holds. With
 // neither a summary nor an answer it has nothing to hand off, and null says so.
 export function handoff(messages: ModelMessage[], answer: string | null, group: GroupKey, firing: number): Handoff | null {
-  const s = lastRecorded(messages, ISSUE_SUMMARY) as { symptom: string; cause: string } | undefined;
+  const s = lastRecorded(messages, ISSUE_SUMMARY) as { title: string; symptom: string; cause: string } | undefined;
   if (s === undefined && answer === null) return null;
   const repo = (lastRecorded(messages, ISSUE_REPOSITORY) as { repo: string } | undefined)?.repo;
   return {
+    ...(s === undefined ? {} : { title: s.title }),
     symptom: s?.symptom ?? fallbackSymptom(group, firing),
     cause: s?.cause ?? answer!,
     ...(repo === undefined ? {} : { repo }),

@@ -76,6 +76,32 @@ test("a cluster-wide group's thread is named for the cluster, and another group 
   expect(threads.map((t) => t.name)).toEqual(["KubeJobFailed / example-app", "NodeDiskPressure / cluster"]);
 });
 
+test("a thread is named for the title the turn recorded, kept to one line within Discord's limit and without links off the allowlist", async () => {
+  const { store, outbox, threads, sent } = setup(["grafana.example.com"]);
+  const { turnId } = store.noteFiring(key, [String(fingerprint++)], "alert");
+  const title = `backup job OOM\nsee https://evil.example.com/x and https://grafana.example.com/d ${"x".repeat(100)}`;
+  store.endTurn(turnId!, "done", [], "answer", { title, symptom: "s", cause: "c" });
+  await outbox.flush();
+
+  const name = threads[0]!.name;
+  expect(name.startsWith("KubeJobFailed / example-app: backup job OOM see ")).toBe(true);
+  expect(name).not.toContain("evil.example.com");
+  expect(name).toContain("https://grafana.example.com/d");
+  expect(name).not.toContain("\n");
+  expect(name).toHaveLength(100);
+  expect(sent[0]!.message.content).toBe(name);
+});
+
+test("a thread takes the latest title recorded before it opens", async () => {
+  const { store, outbox, threads } = setup();
+  for (const title of ["first guess", "better guess"]) {
+    const { turnId } = store.noteFiring(key, [String(fingerprint++)], "alert");
+    store.endTurn(turnId!, "done", [], "answer", { title, symptom: "s", cause: "c" });
+  }
+  await outbox.flush();
+  expect(threads.map((t) => t.name)).toEqual(["KubeJobFailed / example-app: better guess"]);
+});
+
 test("a post goes out with embeds suppressed and mentions off", async () => {
   const { store, outbox, sent } = setup();
   post(store, key, "@everyone look");

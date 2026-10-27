@@ -307,6 +307,17 @@ export class Store {
     return { alertname, namespace };
   }
 
+  // The title of the session's latest hand-off that holds one.
+  title(sessionId: number): string | null {
+    return (
+      this.db
+        .query<{ t: string }, [number]>(
+          "SELECT json_extract(handoff, '$.title') AS t FROM issue_writes WHERE session_id = ? AND t IS NOT NULL ORDER BY id DESC LIMIT 1",
+        )
+        .get(sessionId)?.t ?? null
+    );
+  }
+
   // How many alerts in the session's group fired at its last notification.
   firingCount(sessionId: number): number {
     const row = this.db.query<{ f: string }, [number]>("SELECT firing AS f FROM sessions WHERE id = ?").get(sessionId);

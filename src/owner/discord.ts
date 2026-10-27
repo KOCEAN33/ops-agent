@@ -119,7 +119,10 @@ export class Outbox {
     const known = this.d.store.thread(sessionId);
     if (known?.threadId) return known.threadId;
     const { alertname, namespace } = this.d.store.groupKey(sessionId);
-    const name = clean(`${alertname} / ${namespace ?? "cluster"}`, this.d.linkHosts).slice(0, MAX_THREAD_NAME);
+    // The title is model text, so it is cleaned like a post. A name is one line.
+    const title = this.d.store.title(sessionId);
+    const group = `${alertname} / ${namespace ?? "cluster"}`;
+    const name = clean(title ? `${group}: ${title}` : group, this.d.linkHosts).replace(/\s+/g, " ").slice(0, MAX_THREAD_NAME);
     let starter = known?.starterId;
     if (!starter) {
       starter = await this.d.api.send(this.d.channelId, message(name));
