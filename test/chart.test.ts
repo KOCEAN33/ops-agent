@@ -111,6 +111,37 @@ test.skipIf(!helm)("without a scraper, no PodMonitor is made and the metrics por
   expect(one(docs, "NetworkPolicy").spec.ingress).toHaveLength(1);
 });
 
+test.skipIf(!helm)("with Litestream on, an init container restores the file before a sidecar replicates it, and only they hold the R2 credentials", () => {
+  const { docs } = render({ ...example, litestream: { enabled: true, path: "ops-agent" } });
+  const pod = one(docs, "Deployment").spec.template.spec;
+  const agent = pod.containers.find((c: any) => c.name === "ops-agent");
+  const dbPath = agent.env.find((e: any) => e.name === "DB_PATH").value;
+  const [restore, replicate] = pod.initContainers;
+
+  expect(restore.args).toEqual(expect.arrayContaining(["restore", "-if-db-not-exists", "-if-replica-exists", dbPath]));
+  expect(restore.restartPolicy).toBeUndefined();
+  expect(replicate.args).toEqual(expect.arrayContaining(["replicate"]));
+  expect(replicate.restartPolicy).toBe("Always");
+
+  const r2 = ["R2_ENDPOINT", "R2_BUCKET", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY"];
+  for (const c of [restore, replicate]) {
+    for (const name of r2) expect(c.env).toContainEqual({ name, valueFrom: { secretKeyRef: { name: "ops-agent", key: name } } });
+    expect(c.volumeMounts).toContainEqual(expect.objectContaining({ name: "data", mountPath: agent.volumeMounts.find((m: any) => m.name === "data").mountPath }));
+  }
+  expect(agent.env.map((e: any) => e.name)).not.toEqual(expect.arrayContaining([expect.stringMatching(/^R2_/)]));
+
+  const config = Bun.YAML.parse(one(docs, "ConfigMap").data["litestream.yml"]) as any;
+  expect(config.dbs).toHaveLength(1);
+  expect(config.dbs[0].path).toBe(dbPath);
+  expect(config.dbs[0].replica).toMatchObject({ type: "s3", path: "ops-agent", region: "auto", endpoint: "${R2_ENDPOINT}", bucket: "${R2_BUCKET}" });
+});
+
+test.skipIf(!helm)("with Litestream off, no container restores or replicates", () => {
+  const { docs } = render(example);
+  expect(one(docs, "Deployment").spec.template.spec.initContainers).toBeUndefined();
+  expect(docs.filter((d) => d.kind === "ConfigMap")).toEqual([]);
+});
+
 test.skipIf(!helm)("the chart refuses to render without an Alertmanager selector", () => {
   const { alertmanager: _, ...rest } = example;
   expect(render(rest).error).toContain("alertmanager");

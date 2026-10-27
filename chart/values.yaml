@@ -32,6 +32,12 @@ secret:
     discordBotToken: DISCORD_BOT_TOKEN
     # The GitHub App's private key, PEM. Read only when github is set.
     githubAppKey: GITHUB_APP_KEY
+    # The R2 bucket's endpoint URL, its name and a token scoped to it. Read
+    # only by the Litestream containers, never by the agent.
+    r2Endpoint: R2_ENDPOINT
+    r2Bucket: R2_BUCKET
+    r2AccessKeyId: R2_ACCESS_KEY_ID
+    r2SecretAccessKey: R2_SECRET_ACCESS_KEY
 
 # In-cluster read sources. Each left empty turns its tools off.
 prometheusUrl: ""
@@ -64,6 +70,21 @@ github:
 gitSync:
   image: registry.k8s.io/git-sync/git-sync:v4.8.0
   period: 60s
+
+# Litestream replicates the SQLite file to an R2 bucket within seconds of each
+# write, and restores the newest copy before the agent starts on an empty
+# volume. Egress must admit the endpoint's host, such as in ciliumEgress.fqdns.
+litestream:
+  enabled: false
+  image: docker.io/litestream/litestream:0.5.17-scratch
+  # The prefix under which the bucket holds the replica, without a leading /.
+  path: ops-agent
+  resources:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+    limits:
+      memory: 128Mi
 
 persistence:
   # Holds the SQLite file: sessions, the turn queue, spend and the outboxes.

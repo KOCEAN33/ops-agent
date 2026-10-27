@@ -41,6 +41,15 @@ spec:
         fsGroup: 65533
         seccompProfile:
           type: RuntimeDefault
+      {{- if .Values.litestream.enabled }}
+      initContainers:
+        # Exits 0 when the file exists or the bucket holds no copy yet, so
+        # only a lost file is restored.
+        {{- include "ops-agent.litestream" (dict "root" $ "name" "litestream-restore" "args" (list "restore" "-config" "/etc/litestream/litestream.yml" "-if-db-not-exists" "-if-replica-exists" "-integrity-check" "full" "/data/ops-agent.sqlite")) | nindent 8 }}
+        # A native sidecar: it starts before the agent and stops after it, so
+        # the last writes reach the bucket.
+        {{- include "ops-agent.litestream" (dict "root" $ "name" "litestream" "args" (list "replicate" "-config" "/etc/litestream/litestream.yml") "sidecar" true) | nindent 8 }}
+      {{- end }}
       containers:
         - name: ops-agent
           image: {{ include "ops-agent.image" . }}
@@ -154,6 +163,11 @@ spec:
             claimName: {{ $fullname }}
         - name: tmp
           emptyDir: {}
+        {{- if .Values.litestream.enabled }}
+        - name: litestream
+          configMap:
+            name: {{ $fullname }}-litestream
+        {{- end }}
         {{- range $i, $r := $repos }}
         - name: gitops-{{ $i }}
           emptyDir: {}

@@ -49,6 +49,10 @@ export class Store {
 
   constructor(path: string) {
     this.db = new Database(path, { create: true, strict: true });
+    // Litestream replicates the WAL, and takes a short write lock while it
+    // checkpoints, so a write waits for it instead of failing.
+    this.db.run("PRAGMA journal_mode = WAL");
+    this.db.run("PRAGMA busy_timeout = 5000");
     this.db.run(`CREATE TABLE IF NOT EXISTS sessions (
       id INTEGER PRIMARY KEY,
       group_key TEXT NOT NULL UNIQUE,

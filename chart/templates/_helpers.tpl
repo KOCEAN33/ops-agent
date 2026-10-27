@@ -61,6 +61,34 @@ helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version }}
       subPath: git-sync-{{ .name }}
 {{- end }}
 
+{{/* A Litestream container on the data volume, holding the R2 credentials. */}}
+{{- define "ops-agent.litestream" -}}
+{{- $k := .root.Values.secret.keys -}}
+{{- $secret := .root.Values.secret.name -}}
+- name: {{ .name }}
+  image: {{ .root.Values.litestream.image }}
+  {{- if .sidecar }}
+  restartPolicy: Always
+  {{- end }}
+  args:
+    {{- toYaml .args | nindent 4 }}
+  env:
+    {{- include "ops-agent.secretEnv" (dict "env" "R2_ENDPOINT" "secret" $secret "key" $k.r2Endpoint) | nindent 4 }}
+    {{- include "ops-agent.secretEnv" (dict "env" "R2_BUCKET" "secret" $secret "key" $k.r2Bucket) | nindent 4 }}
+    {{- include "ops-agent.secretEnv" (dict "env" "R2_ACCESS_KEY_ID" "secret" $secret "key" $k.r2AccessKeyId) | nindent 4 }}
+    {{- include "ops-agent.secretEnv" (dict "env" "R2_SECRET_ACCESS_KEY" "secret" $secret "key" $k.r2SecretAccessKey) | nindent 4 }}
+  securityContext:
+    {{- include "ops-agent.containerSecurity" . | nindent 4 }}
+  resources:
+    {{- toYaml .root.Values.litestream.resources | nindent 4 }}
+  volumeMounts:
+    - name: data
+      mountPath: /data
+    - name: litestream
+      mountPath: /etc/litestream
+      readOnly: true
+{{- end }}
+
 {{- define "ops-agent.containerSecurity" -}}
 allowPrivilegeEscalation: false
 readOnlyRootFilesystem: true
