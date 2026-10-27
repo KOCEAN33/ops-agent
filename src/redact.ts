@@ -6,6 +6,9 @@
 const RULES: [RegExp, string][] = [
   // A block cut before its END line is redacted to the end of the text.
   [/-----BEGIN [A-Z ]*PRIVATE KEY-----(?:[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----|[\s\S]*)/g, "[redacted private key]"],
+  // An END line left after the rule above has lost its BEGIN line, as in a
+  // log tail, so the text is redacted from its start.
+  [/^[\s\S]*-----END [A-Z ]*PRIVATE KEY-----/, "[redacted private key]"],
   [/\beyJ[\w-]{8,}\.eyJ[\w-]{8,}\.[\w-]+/g, "[redacted]"],
   [/\b(?:gh[pousr]_[A-Za-z0-9]{36,}|github_pat_\w{20,})/g, "[redacted]"],
   [/\bsk-[\w-]{20,}/g, "[redacted]"],

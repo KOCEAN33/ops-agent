@@ -130,3 +130,42 @@ test("kube_list in one namespace reads that namespace and says when more items e
   expect(out.columns).toEqual(["Name", "Ready"]);
   expect(String(out.more)).toContain("selector");
 });
+
+test("kube_logs reads a container's previous log as text, 100 lines by default", async () => {
+  respond = () => new Response("panic: example failure\n", { headers: { "content-type": "text/plain" } });
+  const out = await tools.kube_logs!.run({ namespace: "example-app", pod: "web-0", container: "web", previous: true }, signal);
+
+  expect(last().path).toBe("/api/v1/namespaces/example-app/pods/web-0/log");
+  expect(last().query.get("container")).toBe("web");
+  expect(last().query.get("previous")).toBe("true");
+  expect(last().query.get("tailLines")).toBe("100");
+  expect(last().authorization).toBe("Bearer sa-token");
+  expect(out).toEqual({ log: "panic: example failure\n" });
+});
+
+test("kube_logs keeps the last 20,000 characters of a long log and says what it cut", async () => {
+  const log = `${"a".repeat(5_000)}${"b".repeat(20_000)}`;
+  respond = () => new Response(log);
+  const out = (await tools.kube_logs!.run({ namespace: "example-app", pod: "web-0", tailLines: 500 }, signal)) as Record<string, string>;
+
+  expect(last().query.get("tailLines")).toBe("500");
+  expect(last().query.has("previous")).toBe(false);
+  expect(out.log).toBe("b".repeat(20_000));
+  expect(out.cut).toContain("5000");
+});
+
+test("kube_logs takes at most 500 lines and only Kubernetes names", () => {
+  const input = tools.kube_logs!.input;
+  expect(input.safeParse({ namespace: "example-app", pod: "web-0", tailLines: 501 }).success).toBe(false);
+  expect(input.safeParse({ namespace: "example-app", pod: "web-0/exec" }).success).toBe(false);
+  expect(input.safeParse({ namespace: "example-app", pod: "web-0", container: "web&previous=true" }).success).toBe(false);
+});
+
+test("kube_logs with no previous run fails with the API's reason and a next step", async () => {
+  respond = () =>
+    Response.json({ kind: "Status", message: 'previous terminated container "web" in pod "web-0" not found', reason: "BadRequest" }, { status: 400 });
+  const err = (await tools.kube_logs!.run({ namespace: "example-app", pod: "web-0", previous: true }, signal).catch((e: ToolError) => e)) as ToolError;
+  expect(err).toBeInstanceOf(ToolError);
+  expect(err.message).toContain("previous terminated container");
+  expect(err.next).toBeString();
+});

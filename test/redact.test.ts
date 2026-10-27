@@ -40,3 +40,11 @@ test("a private key block is redacted, even when cut before its end line", () =>
   expect(redact(`x ${block} y`)).toBe("x [redacted private key] y");
   expect(redact("x -----BEGIN PRIVATE KEY-----\\nMIIEvQIBADAN")).toBe("x [redacted private key]");
 });
+
+test("a private key block cut before its begin line, as a log tail is, is redacted from the start", () => {
+  const tail = "2026-10-27T01:00:00Z MIIEvQIBADAN\n2026-10-27T01:00:00Z -----END PRIVATE KEY-----\nready";
+  expect(redact(tail)).toBe("[redacted private key]\nready");
+  expect(redact("MIIEpAIBAAKCAQEA\\n-----END RSA PRIVATE KEY-----\\n-----BEGIN PRIVATE KEY-----\\nMIIE\\n-----END PRIVATE KEY-----")).toBe(
+    "[redacted private key]\\n[redacted private key]",
+  );
+});

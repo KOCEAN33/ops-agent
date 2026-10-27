@@ -47,14 +47,23 @@ const name = z
 // A list beyond this says to narrow it with a selector.
 const MAX_ROWS = 100;
 
+// A log keeps its end, since the contract's cut at 30,000 characters keeps
+// the start and JSON escaping can grow the text.
+const MAX_LOG_LINES = 500;
+const MAX_LOG_CHARS = 20_000;
+
 async function request(c: KubeConn, path: string, signal: AbortSignal, accept = "application/json") {
+  return (await send(c, path, signal, accept)).json();
+}
+
+async function send(c: KubeConn, path: string, signal: AbortSignal, accept: string): Promise<Response> {
   const token = await c.token();
   const res = await fetch(`${c.url}/${path}`, {
     headers: { accept, ...(token ? { authorization: `Bearer ${token}` } : {}) },
     signal,
     ...(c.ca ? { tls: { ca: c.ca } } : {}),
   });
-  if (res.ok) return res.json();
+  if (res.ok) return res;
   const message = ((await res.json().catch(() => null)) as { message?: string } | null)?.message ?? res.statusText;
   if (res.status === 404) throw new ToolError(`not found: ${message}`, "List the kind to find the right name or namespace.");
   if (res.status === 403) {
@@ -142,6 +151,28 @@ export function kubeTools(c: KubeConn): Record<string, ReadTool> {
             ...shown.map((i) => r.cells[i]),
           ]),
           ...(t.metadata?.continue ? { more: `More than ${MAX_ROWS} items exist. Narrow the list with a selector.` } : {}),
+        };
+      },
+    }),
+    kube_logs: readTool({
+      description:
+        "Read the last lines of one container's log. Set previous to read the run before the last restart, which holds why a crashed container exited.",
+      input: z.object({
+        namespace,
+        pod: name,
+        container: namespace.optional().describe("Required when the pod has more than one container."),
+        previous: z.boolean().optional(),
+        tailLines: z.number().int().min(1).max(MAX_LOG_LINES).optional().describe("100 when omitted."),
+      }),
+      run: async ({ namespace: ns, pod, container, previous, tailLines }, signal) => {
+        const query = new URLSearchParams({ tailLines: String(tailLines ?? 100) });
+        if (container) query.set("container", container);
+        if (previous) query.set("previous", "true");
+        const text = await (await send(c, `api/v1/namespaces/${ns}/pods/${pod}/log?${query}`, signal, "text/plain")).text();
+        if (text.length <= MAX_LOG_CHARS) return { log: text };
+        return {
+          cut: `The first ${text.length - MAX_LOG_CHARS} characters were left out. Ask for fewer lines to see whole ones.`,
+          log: text.slice(-MAX_LOG_CHARS),
         };
       },
     }),
