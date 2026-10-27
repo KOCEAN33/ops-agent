@@ -10,7 +10,7 @@ Each tool is a fixed function, never a shell. Writes are limited to three revers
 
 ## Status
 
-Not yet deployed. A webhook notification starts or resumes its group's session in a durable turn queue. The agent investigates with read tools for Kubernetes, PromQL, LogQL and a clone of each listed GitOps repository, answers in the alert's Discord thread, and hands off to an issue on the repository the model names, or the first listed, through a GitHub App. Sessions, the queue, spend and both outboxes live in SQLite. The stopgap tools come next.
+Runs in the owner's cluster through the chart in `chart/`. A webhook notification starts or resumes its group's session in a durable turn queue. The agent investigates with read tools for Kubernetes, PromQL, LogQL and a clone of each listed GitOps repository, answers in the alert's Discord thread, and keeps one issue per alert group, holding the symptom, the cause and the actions, on the repository the model names, or the first listed, through a GitHub App. Sessions, the queue, spend and both outboxes live in SQLite. The stopgap tools come next.
 
 ## Development
 
