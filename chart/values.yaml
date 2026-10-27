@@ -79,6 +79,10 @@ litestream:
   image: docker.io/litestream/litestream:0.5.17-scratch
   # The prefix under which the bucket holds the replica, without a leading /.
   path: ops-agent
+  # Litestream's own metrics. With metrics.scraper set, the PodMonitor scrapes
+  # them and a PrometheusRule warns while replication keeps failing, since the
+  # sidecar only logs its errors and the pod stays Ready.
+  metricsPort: 9091
   resources:
     requests:
       cpu: 10m

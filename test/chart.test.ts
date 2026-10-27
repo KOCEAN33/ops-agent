@@ -136,6 +136,23 @@ test.skipIf(!helm)("with Litestream on, an init container restores the file befo
   expect(config.dbs[0].replica).toMatchObject({ type: "s3", path: "ops-agent", region: "auto", endpoint: "${R2_ENDPOINT}", bucket: "${R2_BUCKET}" });
 });
 
+test.skipIf(!helm)("with Litestream and a scraper, Litestream's metrics are scraped and its replication errors alert", () => {
+  const { docs } = render({ ...example, litestream: { enabled: true }, metrics: { scraper } });
+  const replicate = one(docs, "Deployment").spec.template.spec.initContainers.find((c: any) => c.name === "litestream");
+  const port = replicate.ports.find((p: any) => p.name === "ls-metrics").containerPort;
+  const config = Bun.YAML.parse(one(docs, "ConfigMap").data["litestream.yml"]) as any;
+  expect(config.addr).toBe(`:${port}`);
+
+  expect(one(docs, "NetworkPolicy").spec.ingress[1]).toEqual({ from: [scraper], ports: [{ port: "metrics" }, { port: "ls-metrics" }] });
+  expect(one(docs, "PodMonitor").spec.podMetricsEndpoints.map((e: any) => e.port)).toEqual(["metrics", "ls-metrics"]);
+
+  const rules = one(docs, "PrometheusRule").spec.groups.flatMap((g: any) => g.rules);
+  const exprs = rules.map((r: any) => r.expr).join("\n");
+  expect(exprs).toContain("litestream_sync_error_count");
+  expect(exprs).toContain("litestream_replica_operation_errors_total");
+  for (const r of rules) expect(r.labels.severity).toBe("warning");
+});
+
 test.skipIf(!helm)("with Litestream off, no container restores or replicates", () => {
   const { docs } = render(example);
   expect(one(docs, "Deployment").spec.template.spec.initContainers).toBeUndefined();

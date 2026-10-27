@@ -17,4 +17,9 @@ spec:
     - port: metrics
       path: /metrics
       interval: {{ .Values.metrics.podMonitor.interval }}
+    {{- if .Values.litestream.enabled }}
+    - port: ls-metrics
+      path: /metrics
+      interval: {{ .Values.metrics.podMonitor.interval }}
+    {{- end }}
 {{- end }}

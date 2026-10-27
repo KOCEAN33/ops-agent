@@ -40,4 +40,7 @@ spec:
           {{- end }}
       ports:
         - port: metrics
+        {{- if .Values.litestream.enabled }}
+        - port: ls-metrics
+        {{- end }}
     {{- end }}

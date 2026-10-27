@@ -9,6 +9,7 @@ data:
   # Litestream fills ${...} from its environment, so the credentials stay in
   # the Secret.
   litestream.yml: |
+    addr: ":{{ .Values.litestream.metricsPort }}"
     dbs:
       - path: /data/ops-agent.sqlite
         replica:

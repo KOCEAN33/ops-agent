@@ -69,6 +69,9 @@ helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version }}
   image: {{ .root.Values.litestream.image }}
   {{- if .sidecar }}
   restartPolicy: Always
+  ports:
+    - name: ls-metrics
+      containerPort: {{ .root.Values.litestream.metricsPort }}
   {{- end }}
   args:
     {{- toYaml .args | nindent 4 }}
