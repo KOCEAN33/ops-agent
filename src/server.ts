@@ -2,7 +2,7 @@ import { anthropic } from "@ai-sdk/anthropic";
 import { timingSafeEqual } from "node:crypto";
 import { readInstructions, runTurn, type AgentDeps } from "./agent/turn";
 import { parseWebhook } from "./alert";
-import { connect, onMessage, Outbox } from "./owner/discord";
+import { connect, onMessage, Outbox, whileTyping } from "./owner/discord";
 import { loadConfig, settingsFromYaml, type Config } from "./config";
 import { gitopsTools } from "./tools/gitops";
 import { githubApi, IssueQueue, issueRepositoryTool, issueSummaryTool } from "./owner/issues";
@@ -123,9 +123,19 @@ if (import.meta.main) {
   };
   console.log(JSON.stringify({ msg: "tools", tools: Object.keys(agent.tools) }));
 
+  const d = config.discord;
+  // The gateway queues replies through the queue made below.
+  const api = d && connect(d.token, (m) => onMessage({ store, ownerId: d.ownerId, kick: () => queue.kick() }, m));
   const queue = new TurnQueue({
     store,
-    run: (turn) => runTurn(agent, turn),
+    // A session's first turn has no thread yet to show typing in. A turn the
+    // monthly cap refuses, by the same test runTurn makes first, does no work
+    // and retries each minute, so it shows no typing either.
+    run: async (turn) => {
+      const thread = api && store.thread(turn.sessionId)?.threadId;
+      const capped = store.monthSpend(now().toISOString().slice(0, 7)) >= agent.monthlyCapUsd;
+      return thread && !capped ? whileTyping(api, thread, () => runTurn(agent, turn)) : runTurn(agent, turn);
+    },
     now,
     limit: PARALLEL_TURNS,
     retryMs: RETRY_MS,
@@ -134,9 +144,7 @@ if (import.meta.main) {
   // Turns a crash or a restart cut short run again.
   queue.kick();
 
-  const d = config.discord;
-  if (d) {
-    const api = connect(d.token, (m) => onMessage({ store, ownerId: d.ownerId, kick: () => queue.kick() }, m));
+  if (d && api) {
     const outbox = new Outbox({ store, api, channelId: d.channelId, linkHosts: config.linkHosts });
     setInterval(() => void outbox.flush(), OUTBOX_POLL_MS);
   } else {

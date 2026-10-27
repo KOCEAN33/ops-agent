@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { onMessage, Outbox, Refused, UnknownChannel, type DiscordApi, type Message } from "../src/owner/discord";
+import { onMessage, Outbox, Refused, UnknownChannel, whileTyping, type DiscordApi, type Message } from "../src/owner/discord";
 import { Store } from "../src/store";
 
 const CHANNEL = "100";
@@ -24,6 +24,7 @@ function fakeDiscord() {
       sent.push({ channelId, message });
       return `msg-${sent.length}`;
     },
+    async typing() {},
   } satisfies DiscordApi & { fail: unknown };
   // Messages posted in threads, leaving out starter messages in the channel.
   const inThreads = () => sent.filter((s) => s.channelId !== CHANNEL).map((s) => [s.channelId, s.message.content]);
@@ -230,4 +231,21 @@ test("a message from anyone but the owner, or outside an alert's thread, queues 
   onMessage(d, { channelId: thread, authorId: OWNER, content: "  " });
   expect(store.pending()).toHaveLength(0);
   expect(kicks).toBe(0);
+});
+
+test("whileTyping shows typing at once and then every interval until the work ends", async () => {
+  const calls: string[] = [];
+  const api = { openThread: async () => "", send: async () => "", typing: async (c: string) => void calls.push(c) } satisfies DiscordApi;
+  const out = await whileTyping(api, "thread-1", () => Bun.sleep(110).then(() => "answer"), 40);
+  expect(out).toBe("answer");
+  // At 0, 40 and 80 ms.
+  expect(calls).toEqual(["thread-1", "thread-1", "thread-1"]);
+  await Bun.sleep(100);
+  expect(calls).toHaveLength(3);
+});
+
+test("whileTyping ignores a failed typing call and passes the work's failure through", async () => {
+  const api = { openThread: async () => "", send: async () => "", typing: async () => { throw new Refused("missing access"); } } satisfies DiscordApi;
+  expect(await whileTyping(api, "thread-1", () => Bun.sleep(30).then(() => "answer"), 10)).toBe("answer");
+  expect(whileTyping(api, "thread-1", () => Promise.reject(new Error("model down")), 10)).rejects.toThrow("model down");
 });

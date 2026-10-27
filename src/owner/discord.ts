@@ -16,6 +16,8 @@ export interface DiscordApi {
   openThread(channelId: string, messageId: string, name: string): Promise<string>;
   // Returns the message's ID.
   send(channelId: string, message: Message): Promise<string>;
+  // Shows the bot typing in the channel for 10 seconds, or until it sends.
+  typing(channelId: string): Promise<void>;
 }
 
 // Discord refused the request for good, so sending it again changes nothing.
@@ -27,7 +29,8 @@ export class UnknownChannel extends Error {}
 
 const MAX_CHARS = 2_000;
 const MAX_THREAD_NAME = 100;
-
+// One typing call lasts 10 seconds, so a shorter interval leaves no gap.
+const TYPING_EVERY_MS = 8_000;
 
 // Embeds stay off, so Discord fetches no link the text keeps, and no mention in
 // the text pings anyone.
@@ -114,6 +117,20 @@ export class Outbox {
   }
 }
 
+// Shows the bot typing in a thread while work runs, such as a turn, whose
+// post the outbox then sends. Typing is a courtesy, so a failed call is
+// ignored.
+export async function whileTyping<T>(api: DiscordApi, channelId: string, work: () => Promise<T>, everyMs = TYPING_EVERY_MS): Promise<T> {
+  const show = () => void api.typing(channelId).catch(() => {});
+  show();
+  const timer = setInterval(show, everyMs);
+  try {
+    return await work();
+  } finally {
+    clearInterval(timer);
+  }
+}
+
 export interface ReplyDeps {
   store: Store;
   ownerId: string;
@@ -193,5 +210,6 @@ export function connect(token: string, onMessage: (m: { channelId: string; autho
         }
       }),
     send: (channelId, msg) => call(async () => (await client.api.channels.createMessage(channelId, msg)).id),
+    typing: (channelId) => client.api.channels.showTyping(channelId),
   };
 }
