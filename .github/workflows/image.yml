@@ -1,15 +1,21 @@
-# Builds the image on a GitHub-hosted runner and pushes it to GHCR. Pull
+# Checks every push and pull request. A push to main releases: semantic-release
+# tags the next version from the commit messages (releaserc.toml), the image
+# carries it, and the deploy job pins both in the GitOps repository. Pull
 # requests run the checks alone, so a fork's workflow never holds a write token.
 name: image
 
 on:
   push:
     branches: [main]
-    tags: ["v*"]
   pull_request:
 
 permissions:
   contents: read
+
+# Two releases at once would compute the same next version.
+concurrency:
+  group: image-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   check:
@@ -24,15 +30,42 @@ jobs:
       - run: bun run typecheck
       - run: bun test
 
-  push:
+  build:
     if: github.event_name == 'push'
     needs: check
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
       packages: write
+    outputs:
+      digest: ${{ steps.push.outputs.digest }}
+      # The git ref of the chart that matches the image: the release tag, or the commit.
+      revision: ${{ steps.version.outputs.tag || github.sha }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      # Tags and creates the GitHub Release only. A tag pushed with GITHUB_TOKEN
+      # starts no workflow, so this job builds the image itself.
+      - id: release
+        uses: python-semantic-release/python-semantic-release@b700dbeb1f431a0fcc30a79f3f0869407fe07278 # v10.7.0
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          config_file: releaserc.toml
+          commit: false
+          tag: true
+          push: true
+          vcs_release: true
+          changelog: false
+      # A rerun after the tag was pushed reports released=false, yet the tag
+      # still names this commit, so the tag decides, not the run.
+      - id: version
+        env:
+          TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          if [ -n "$TAG" ] && [ "$(git rev-parse -q --verify "refs/tags/${TAG}^{commit}")" = "$GITHUB_SHA" ]; then
+            echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          fi
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
@@ -43,12 +76,56 @@ jobs:
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: ghcr.io/${{ github.repository }}
+          flavor: latest=false
           tags: |
             type=sha,format=long
-            type=semver,pattern={{version}}
-      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+            type=semver,pattern={{version}},value=${{ steps.version.outputs.tag }},enable=${{ steps.version.outputs.tag != '' }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ steps.version.outputs.tag }},enable=${{ steps.version.outputs.tag != '' }}
+      - id: push
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+
+  # Pins the image by the digest just pushed and the chart at the same commit,
+  # in one commit to the GitOps repository, so Argo CD never pairs a chart with
+  # an image from another release. The repository's name stays in the
+  # GITOPS_REPO secret, since this repository's Actions logs are public and
+  # show a variable's value. The token comes from
+  # the homelab CI GitHub App, scoped to that one repository.
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    concurrency: deploy-prod
+    steps:
+      - id: app
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.HOMELAB_APP_CLIENT_ID }}
+          private-key: ${{ secrets.HOMELAB_APP_PRIVATE_KEY }}
+          repositories: ${{ secrets.GITOPS_REPO }}
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ github.repository_owner }}/${{ secrets.GITOPS_REPO }}
+          token: ${{ steps.app.outputs.token }}
+      - name: Pin image digest and chartRevision
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          BOT: ${{ steps.app.outputs.app-slug }}[bot]
+          DIGEST: ${{ needs.build.outputs.digest }}
+          REVISION: ${{ needs.build.outputs.revision }}
+        run: |
+          values=ops-agent/envs/prod.yaml
+          sed -i -E "s/^(  tag: ).*/\1${DIGEST}/" "$values"
+          grep -q "^  tag: ${DIGEST}$" "$values"
+          # chartRevision is the line after `- env: prod` in the list generator.
+          appset=ops-agent/appset.yaml
+          sed -i -E "/^ *- env: prod$/{n;s/^( *chartRevision: ).*/\1${REVISION}/}" "$appset"
+          grep -A1 -E "^ *- env: prod$" "$appset" | grep -qE "^ *chartRevision: ${REVISION}$"
+          git diff --quiet && exit 0
+          git config user.name "$BOT"
+          git config user.email "$(gh api "/users/${BOT}" --jq .id)+${BOT}@users.noreply.github.com"
+          git commit -am "chore(ops-agent): deploy ${REVISION::12}"
+          git push

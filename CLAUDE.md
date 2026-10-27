@@ -8,7 +8,7 @@ The owner's in-cluster first responder. It takes an Alertmanager webhook, invest
 
 This repository is public. The threat model in `docs/design/threat-model.md` lists what stays out of code, fixtures, docs and commits. Use `example.com` values and generic names in test payloads. Code reads every in-cluster URL, namespace name and credential from the environment.
 
-A separate agent runs the `coding-review` skill, which covers security, at two points: when a feature is done, meaning a `docs/NEXT.md` step meets its Done line, over the diff since the step began; and right after a commit that changes a boundary in `docs/design/`, such as permissions, the network, the deployment path, or who reads outside input. Give the reviewer the diff and the threat model, not your conclusions. Fix what it finds, or tell the owner why not.
+A separate agent runs the `coding-review` skill, which covers security, at three points: when a feature is done, meaning a `docs/NEXT.md` step meets its Done line, over the diff since the step began; right after a commit that changes a boundary in `docs/design/`, such as permissions, the network, the deployment path, or who reads outside input; and before a push to main that changes `chart/`, over that change, since the push deploys it. Give the reviewer the diff and the threat model, not your conclusions. Fix what it finds, or tell the owner why not.
 
 ## Stack
 
