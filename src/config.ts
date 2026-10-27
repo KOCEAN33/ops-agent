@@ -129,6 +129,46 @@ function github(env: Env, repos: string[]): Config["github"] {
   return g;
 }
 
+// A local config.yaml's paths, in the chart values' shape, and the variable
+// each sets. local holds what the chart fixes in a pod. A pod has no such file
+// and gets every setting as a variable from the chart.
+const YAML_VARS: [string, string][] = [
+  ["model", "MODEL"],
+  ["price.input", "PRICE_INPUT"],
+  ["price.output", "PRICE_OUTPUT"],
+  ["price.cacheRead", "PRICE_CACHE_READ"],
+  ["price.cacheWrite", "PRICE_CACHE_WRITE"],
+  ["turnCapUsd", "TURN_CAP_USD"],
+  ["monthlyCapUsd", "MONTHLY_CAP_USD"],
+  ["prometheusUrl", "PROMETHEUS_URL"],
+  ["lokiUrl", "LOKI_URL"],
+  ["linkAllowlist", "LINK_ALLOWLIST"],
+  ["discord.channelId", "DISCORD_CHANNEL_ID"],
+  ["discord.ownerId", "DISCORD_OWNER_ID"],
+  ["github.appId", "GITHUB_APP_ID"],
+  ["github.gitopsRepos", "GITOPS_REPOS"],
+  ["local.dbPath", "DB_PATH"],
+  ["local.port", "PORT"],
+  ["local.kubeApiUrl", "KUBE_API_URL"],
+  ["local.gitopsDir", "GITOPS_DIR"],
+  ["local.instructionsDir", "INSTRUCTIONS_DIR"],
+];
+
+// YAML reads a bare 18-digit Discord ID as a float and rounds it.
+const ID_PATHS = new Set(["discord.channelId", "discord.ownerId", "github.appId"]);
+
+export function settingsFromYaml(text: string): Env {
+  const root = Bun.YAML.parse(text) ?? {};
+  const env: Env = {};
+  for (const [path, name] of YAML_VARS) {
+    const v = path.split(".").reduce<any>((o, k) => o?.[k], root);
+    if (v === undefined || v === null || v === "") continue;
+    if (ID_PATHS.has(path) && typeof v !== "string") throw new Error(`${path} in config.yaml must be quoted`);
+    env[name] = Array.isArray(v) ? v.join(",") : String(v);
+  }
+  return env;
+}
+
 export function loadConfig(env: Env = process.env): Config {
   // @ai-sdk/anthropic reads the key itself. Checking it here fails the start
   // instead of the first alert.

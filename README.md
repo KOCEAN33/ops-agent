@@ -23,9 +23,9 @@ bun run typecheck
 bun start   # POST an Alertmanager webhook payload to /alertmanager
 ```
 
-`bun start` reads its configuration from the environment and exits when a required variable is missing. It loads two gitignored files: `.env` for credentials, copied from `.env.example`, and `config.env` for settings, copied from `config.env.example`.
+`bun start` reads its configuration from the environment and exits when a required variable is missing. It reads two gitignored files: `.env` for credentials, copied from `.env.example`, and `config.yaml` for settings, copied from `config.yaml.example`. `config.yaml` takes the chart values' shape, and a variable set on the command line wins over it.
 
-The two examples list every variable with its meaning, and for a pod, whether it comes from the Secret, a chart value, or the chart itself. The required ones are `ANTHROPIC_API_KEY`, `MODEL`, `TURN_CAP_USD`, `MONTHLY_CAP_USD`, `DB_PATH` and `WEBHOOK_TOKEN`. Each read source, the Discord bot and issues stay off until their variables are set.
+The two examples list every setting with its meaning, and for a pod, whether it comes from the Secret, a chart value, or the chart itself. The required ones are `ANTHROPIC_API_KEY` and `WEBHOOK_TOKEN` in `.env`, and `model`, `turnCapUsd`, `monthlyCapUsd` and `local.dbPath` in `config.yaml`. Each read source, the Discord bot and issues stay off until their settings are set.
 
 `test/payloads/` holds sample webhook payloads in the Alertmanager v4 format.
 

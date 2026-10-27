@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { loadConfig } from "../src/config";
+import { loadConfig, settingsFromYaml } from "../src/config";
 
 const base = {
   ANTHROPIC_API_KEY: "sk-test",
@@ -107,4 +107,61 @@ test("a partial GitHub configuration fails at start", () => {
 test("LINK_ALLOWLIST lists hosts, case and spaces ignored", () => {
   const c = loadConfig({ ...base, MODEL: "claude-sonnet-5-5", LINK_ALLOWLIST: " Grafana.example.com, github.com ," });
   expect([...c.linkHosts]).toEqual(["grafana.example.com", "github.com"]);
+});
+
+// A local config.yaml takes the chart values' shape, so the deployment's
+// values read the same. local holds what a pod gets from the chart itself.
+const yaml = `
+model: claude-sonnet-5-5
+price: { input: 1, output: 5, cacheRead: 0.1, cacheWrite: 1.25 }
+turnCapUsd: 2
+monthlyCapUsd: "40"
+prometheusUrl: http://prometheus.example.com
+lokiUrl: ""
+linkAllowlist: [grafana.example.com, argocd.example.com]
+discord:
+  channelId: "100000000000000001"
+  ownerId: "100000000000000002"
+github:
+  appId: "12345"
+  installationId: "67890"
+  gitopsRepos: [example-owner/example-apps, example-owner/example-hosts]
+  instructionsRepo: example-owner/example-instructions
+local:
+  dbPath: ./ops-agent.sqlite
+  port: 18080
+  kubeApiUrl: http://127.0.0.1:8001
+  gitopsDir: ""
+  instructionsDir: ../example-instructions
+`;
+
+test("config.yaml maps each chart value and local setting to its variable, and skips what the agent does not read", () => {
+  expect(settingsFromYaml(yaml)).toEqual({
+    MODEL: "claude-sonnet-5-5",
+    PRICE_INPUT: "1",
+    PRICE_OUTPUT: "5",
+    PRICE_CACHE_READ: "0.1",
+    PRICE_CACHE_WRITE: "1.25",
+    TURN_CAP_USD: "2",
+    MONTHLY_CAP_USD: "40",
+    PROMETHEUS_URL: "http://prometheus.example.com",
+    LINK_ALLOWLIST: "grafana.example.com,argocd.example.com",
+    DISCORD_CHANNEL_ID: "100000000000000001",
+    DISCORD_OWNER_ID: "100000000000000002",
+    GITHUB_APP_ID: "12345",
+    GITOPS_REPOS: "example-owner/example-apps,example-owner/example-hosts",
+    DB_PATH: "./ops-agent.sqlite",
+    PORT: "18080",
+    KUBE_API_URL: "http://127.0.0.1:8001",
+    INSTRUCTIONS_DIR: "../example-instructions",
+  });
+});
+
+test("a bare-number ID in config.yaml fails at start, since YAML rounds it", () => {
+  expect(() => settingsFromYaml("discord:\n  channelId: 100000000000000001\n  ownerId: \"1\"\n")).toThrow(/discord.channelId/);
+  expect(() => settingsFromYaml("github:\n  appId: 12345\n")).toThrow(/github.appId/);
+});
+
+test("an empty config.yaml sets nothing", () => {
+  expect(settingsFromYaml("")).toEqual({});
 });

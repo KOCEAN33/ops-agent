@@ -1,0 +1,65 @@
+# Settings for a local run. Copy to config.yaml, which is gitignored.
+# Credentials go in .env (.env.example). `bun start` reads both, and a variable
+# set on the command line wins over this file.
+#
+# Every key but local is a chart value with the same path in chart/values.yaml,
+# so the deployment's values file reads the same. In a pod the chart sets each
+# as a variable, and no config.yaml exists.
+
+# The price follows the model from the table in src/config.ts.
+model: claude-sonnet-5-5
+# USD per million tokens with the 5-minute cache write price, all four or none.
+# Needed for a model outside that table.
+# price:
+#   input: 2
+#   output: 10
+#   cacheRead: 0.1
+#   cacheWrite: 2.5
+# Above one call's worst case, about 0.4 USD on Claude Sonnet 5.5 with a long
+# history, or a long session's first call is refused.
+turnCapUsd: 1
+# Under the Anthropic credit.
+monthlyCapUsd: 50
+
+# Each left empty turns its tools off.
+prometheusUrl: ""
+lokiUrl: ""
+
+# Hosts whose links survive in posts and issues. Every other link is removed.
+# Which hosts belong here: Threat model in docs/design.md.
+linkAllowlist: []
+
+# Both set turn the Discord bot on, and with neither, posts wait in the store.
+# Quote every ID: YAML reads a bare 18-digit number as a float and rounds it.
+discord:
+  channelId: ""
+  # The only user whose replies and button presses act.
+  ownerId: ""
+
+# appId turns issues on, and with it unset, hand-offs wait in the store. Issues
+# also need gitopsRepos, and the App needs issues write on each repository.
+github:
+  appId: ""
+  # owner/name of each GitOps repository, the first being the default issue
+  # repository. Names, the part after the owner, must be unique. Needed by the
+  # GitOps read tools and by issues.
+  gitopsRepos: []
+
+# Local only: in a pod, the chart or the agent sets these.
+local:
+  # Pod: /data/ops-agent.sqlite on the PVC.
+  dbPath: ./ops-agent.sqlite
+  # Pod: 8080.
+  port: 8080
+  # Pod: unset, since the agent finds the API server and its ServiceAccount
+  # itself. Locally, a workstation running `kubectl proxy`, such as
+  # http://127.0.0.1:8001. Empty turns the Kubernetes tools off.
+  kubeApiUrl: ""
+  # Pod: /repos/gitops, filled by one git-sync sidecar per gitopsRepos entry.
+  # Locally, the parent of clones at main: owner/name is cloned at
+  # <gitopsDir>/<name>/current. Empty turns the GitOps read tools off.
+  gitopsDir: ""
+  # Pod: /repos/instructions/current when github.instructionsRepo is set.
+  # Locally, a clone of the operating instructions repository. Empty runs on
+  # the base instructions alone.
+  instructionsDir: ""
