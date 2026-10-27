@@ -83,7 +83,7 @@
       "type": "stat",
       "id": 2,
       "title": "Spend",
-      "description": "Model spend charged in the time range: reserved less refunded. Pick This month to compare with the monthly cap.",
+      "description": "Model spend charged in the time range: reserved less refunded. The counters began with the metrics deploy, so the store's month total, which the cap reads, can be higher.",
       "datasource": {
         "type": "prometheus",
         "uid": "${datasource}"
@@ -100,7 +100,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum(increase(ops_agent_spend_reserved_usd_total{job=\"$job\"}[$__range])) - sum(increase(ops_agent_spend_refunded_usd_total{job=\"$job\"}[$__range]))",
+          "expr": "sum(max_over_time(ops_agent_spend_reserved_usd_total{job=\"$job\"}[$__range]) - min_over_time(ops_agent_spend_reserved_usd_total{job=\"$job\"}[$__range])) - sum(max_over_time(ops_agent_spend_refunded_usd_total{job=\"$job\"}[$__range]) - min_over_time(ops_agent_spend_refunded_usd_total{job=\"$job\"}[$__range]))",
           "legendFormat": "",
           "refId": "A"
         }
@@ -161,7 +161,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum(increase(ops_agent_turns_total{job=\"$job\"}[$__range]))",
+          "expr": "sum(max_over_time(ops_agent_turns_total{job=\"$job\"}[$__range]) - min_over_time(ops_agent_turns_total{job=\"$job\"}[$__range]))",
           "legendFormat": "",
           "refId": "A"
         }
@@ -222,7 +222,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum(increase(ops_agent_turns_total{job=\"$job\",end!=\"done\"}[$__range]))",
+          "expr": "sum(max_over_time(ops_agent_turns_total{job=\"$job\",end!=\"done\"}[$__range]) - min_over_time(ops_agent_turns_total{job=\"$job\",end!=\"done\"}[$__range]))",
           "legendFormat": "",
           "refId": "A"
         }
@@ -287,7 +287,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum(increase(ops_agent_tool_calls_total{job=\"$job\"}[$__range]))",
+          "expr": "sum(max_over_time(ops_agent_tool_calls_total{job=\"$job\"}[$__range]) - min_over_time(ops_agent_tool_calls_total{job=\"$job\"}[$__range]))",
           "legendFormat": "",
           "refId": "A"
         }
@@ -603,7 +603,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sort_desc(sum by (tool) (increase(ops_agent_tool_calls_total{job=\"$job\"}[$__range])))",
+          "expr": "sort_desc(sum by (tool) (max_over_time(ops_agent_tool_calls_total{job=\"$job\"}[$__range]) - min_over_time(ops_agent_tool_calls_total{job=\"$job\"}[$__range])))",
           "legendFormat": "{{tool}}",
           "refId": "A",
           "instant": true
@@ -1302,8 +1302,8 @@
     {
       "type": "timeseries",
       "id": 24,
-      "title": "Resident memory",
-      "description": "By container.",
+      "title": "Memory",
+      "description": "Working set by container, from the kubelet.",
       "datasource": {
         "type": "prometheus",
         "uid": "${datasource}"
@@ -1320,7 +1320,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum by (container) (process_resident_memory_bytes{job=\"$job\"})",
+          "expr": "sum by (container) (container_memory_working_set_bytes{namespace=\"$namespace\",container!=\"\"})",
           "legendFormat": "{{container}}",
           "refId": "A"
         }
@@ -1358,7 +1358,7 @@
       "type": "timeseries",
       "id": 25,
       "title": "CPU",
-      "description": "By container.",
+      "description": "CPU cores used by container, from the kubelet.",
       "datasource": {
         "type": "prometheus",
         "uid": "${datasource}"
@@ -1375,14 +1375,14 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum by (container) (rate(process_cpu_seconds_total{job=\"$job\"}[$__rate_interval]))",
+          "expr": "sum by (container) (rate(container_cpu_usage_seconds_total{namespace=\"$namespace\",container!=\"\"}[$__rate_interval]))",
           "legendFormat": "{{container}}",
           "refId": "A"
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "percentunit",
+          "unit": "short",
           "custom": {
             "drawStyle": "line",
             "fillOpacity": 10,
