@@ -103,6 +103,9 @@ test.skipIf(!helm)("with a scraper set, it alone reaches the metrics port, which
   expect(m.metadata.labels).toMatchObject({ release: "example" });
   expect(m.spec.selector.matchLabels).toEqual(one(docs, "Deployment").spec.selector.matchLabels);
   expect(m.spec.podMetricsEndpoints).toEqual([expect.objectContaining({ port: "metrics", path: "/metrics" })]);
+  // Prometheus names a PodMonitor's job <namespace>/<name>, and the spend seed
+  // reads only that job's series. helm template renders into "default".
+  expect(c.env).toContainEqual({ name: "SPEND_SEED_JOB", value: `default/${m.metadata.name}` });
 });
 
 test.skipIf(!helm)("without a scraper, no PodMonitor is made and the metrics port admits nothing", () => {

@@ -1,5 +1,6 @@
 import { anthropic } from "@ai-sdk/anthropic";
 import { timingSafeEqual } from "node:crypto";
+import { existsSync } from "node:fs";
 import { readInstructions, runTurn, type AgentDeps } from "./agent/turn";
 import { parseWebhook } from "./alert";
 import { Metrics } from "./metrics";
@@ -10,6 +11,7 @@ import { githubApi, IssueQueue, issueRepositoryTool, issueSummaryTool } from "./
 import { kubeTools } from "./tools/kube";
 import { lokiTools, promTools } from "./tools/query";
 import { TurnQueue } from "./queue";
+import { seedSpend } from "./seed";
 import { Store } from "./store";
 import type { ReadTool } from "./tools/contract";
 
@@ -108,6 +110,9 @@ if (import.meta.main) {
   // the local file.
   const local = Bun.file("config.yaml");
   const config = loadConfig({ ...((await local.exists()) ? settingsFromYaml(await local.text()) : {}), ...process.env });
+  // Litestream's restore runs before the agent, so a file missing here is one
+  // no restore filled.
+  const fresh = !existsSync(config.dbPath);
   const store = new Store(config.dbPath);
   const now = () => new Date();
   const agent: AgentDeps = {
@@ -152,6 +157,12 @@ if (import.meta.main) {
     retryMs: RETRY_MS,
     maxAttempts: MAX_ATTEMPTS,
   });
+  // Before any turn runs, so none spends against a month restarted at zero. A
+  // new file holds no session, so a reply the gateway passes on meanwhile
+  // queues nothing.
+  if (fresh && config.prometheusUrl && config.spendSeedJob) {
+    await seedSpend({ store, url: config.prometheusUrl, job: config.spendSeedJob, now: now() });
+  }
   // Turns a crash or a restart cut short run again.
   queue.kick();
 

@@ -64,6 +64,13 @@ spec:
               value: "8080"
             - name: METRICS_PORT
               value: {{ .Values.metrics.port | quote }}
+            {{- with .Values.metrics.scraper }}
+            {{- if or .namespaceSelector .podSelector }}
+            # The PodMonitor's job, whose spend counters seed a new file.
+            - name: SPEND_SEED_JOB
+              value: {{ printf "%s/%s" $.Release.Namespace $fullname | quote }}
+            {{- end }}
+            {{- end }}
             - name: DB_PATH
               value: /data/ops-agent.sqlite
             - name: MODEL

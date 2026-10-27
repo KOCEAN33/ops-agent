@@ -18,6 +18,9 @@ export interface Config {
   // The port /metrics is served on, apart from the webhook. Off when unset, as
   // for a local run.
   metricsPort: number | null;
+  // The scrape job of the agent's own metrics. With prometheusUrl, a start on
+  // a new SQLite file seeds the month's spend from that job's counters.
+  spendSeedJob: string | null;
   // Each read source left unset turns its tools off.
   kube: { url: string; serviceAccount: boolean } | null;
   prometheusUrl: string | null;
@@ -188,6 +191,7 @@ export function loadConfig(env: Env = process.env): Config {
     instructionsDir: env.INSTRUCTIONS_DIR || null,
     port: Number(env.PORT ?? 8080),
     metricsPort: env.METRICS_PORT ? Number(env.METRICS_PORT) : null,
+    spendSeedJob: env.SPEND_SEED_JOB || null,
     kube: kube(env),
     prometheusUrl: url(env.PROMETHEUS_URL),
     lokiUrl: url(env.LOKI_URL),
