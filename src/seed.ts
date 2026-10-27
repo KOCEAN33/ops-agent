@@ -2,8 +2,8 @@ import type { Store } from "./store";
 
 // A new SQLite file that no restore filled would restart the month's spend at
 // zero. The agent's spend counters outlive the file in the metrics store, so a
-// start on such a file reads the month's spend back from them (docs/design.md,
-// Spend seed after a lost file).
+// start on such a file reads the month's spend back from them (docs/design/
+// chosen.md, Spend seed after a lost file).
 
 const RESERVED = "ops_agent_spend_reserved_usd_total";
 const REFUNDED = "ops_agent_spend_refunded_usd_total";

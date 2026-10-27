@@ -70,8 +70,8 @@ function failure(e: unknown, timeoutMs: number): { error: string; next: string }
   return { error: `failed: ${String(e)}`, next: "Try a different read, or answer with what you have and say what failed." };
 }
 
-// Builds one turn's tools under the Tool contract in docs/design.md: a time
-// limit on each call, and a timeout, failure or bad argument returned as a
+// Builds one turn's tools under the Tool contract in docs/design/shape.md: a
+// time limit on each call, and a timeout, failure or bad argument returned as a
 // result. The SDK would turn the last two into a result as well, but without a
 // next step. A repeated identical call is not run again, and `repeated` tells
 // the loop to make the model answer. onCall hears every call, run or not.

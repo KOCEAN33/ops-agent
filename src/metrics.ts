@@ -1,6 +1,7 @@
 // The agent's metrics in Prometheus's text format, scraped from their own
-// port (docs/design.md, Metrics). Label values come only from fixed sets, the
-// model, how a turn ended and the tool name, so no alert group adds series.
+// port (docs/design/chosen.md, Metrics). Label values come only from fixed
+// sets, the model, how a turn ended and the tool name, so no alert group adds
+// series.
 
 export type TurnEnd = "done" | "budget" | "monthly-cap" | "failed";
 
@@ -72,7 +73,7 @@ export class Metrics {
   // difference after, so reserved less refunded is what it charged, even for
   // a call a crash cut. A series born mid-month loses the value of its first
   // scrape to increase(), so a month's spend is read per series from its
-  // values, not with increase() (docs/design.md, Spend seed).
+  // values, not with increase() (docs/design/chosen.md, Spend seed).
   readonly spendReserved = new Counter("ops_agent_spend_reserved_usd_total", "Model spend reserved before each call, in USD.");
   readonly spendRefunded = new Counter("ops_agent_spend_refunded_usd_total", "Reserved model spend refunded after each call, in USD.");
   readonly turns = new Counter("ops_agent_turns_total", "Turn attempts by how they ended.");

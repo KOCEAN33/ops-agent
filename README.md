@@ -6,7 +6,7 @@ It protects, in order, data, then security, then service. It is an operator, not
 
 ## Design
 
-Each tool is a fixed function, never a shell. Writes are limited to three reversible stopgaps in namespaces the owner allowlists, enforced by RBAC and an admission policy rather than the prompt. Every model call is held to a per-turn and a monthly spend cap. [`docs/design.md`](docs/design.md) holds the decisions, the mechanism behind them, and the threat model.
+Each tool is a fixed function, never a shell. Writes are limited to three reversible stopgaps in namespaces the owner allowlists, enforced by RBAC and an admission policy rather than the prompt. Every model call is held to a per-turn and a monthly spend cap. [`docs/design.md`](docs/design.md) indexes the decisions, the mechanism behind them, and the threat model.
 
 ## Status
 

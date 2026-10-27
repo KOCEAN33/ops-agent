@@ -10,7 +10,7 @@ export interface KubeConn {
 }
 
 // The kinds the agent reads. ClusterRole `view` covers the namespaced ones and
-// a second ClusterRole the cluster-scoped ones (docs/design.md, Tools).
+// a second ClusterRole the cluster-scoped ones (docs/design/shape.md, Tools).
 // Secrets and ConfigMaps are left out, so a read never asks for them.
 const KINDS = {
   pods: { api: "api/v1", namespaced: true },
