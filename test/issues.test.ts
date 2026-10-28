@@ -67,8 +67,9 @@ async function turn(store: Store, text: string, m: MockLanguageModelV4, tools?: 
 function fakeGitHub() {
   const issues: { repo: string; number: number; title: string; body: string }[] = [];
   const edits: { repo: string; issue: number; body: string }[] = [];
+  const closed = new Set<string>();
   const api = {
-    fail: null as null | ((call: "open" | "edit") => Error | null),
+    fail: null as null | ((call: "open" | "edit" | "isClosed") => Error | null),
     lose: false as boolean,
     async open(repo: string, title: string, body: string) {
       const e = api.fail?.("open");
@@ -89,8 +90,15 @@ function fakeGitHub() {
     async find(repo: string, marker: string) {
       return issues.find((i) => i.repo === repo && i.body.includes(marker))?.number ?? null;
     },
+    async isClosed(repo: string, issue: number) {
+      const e = api.fail?.("isClosed");
+      if (e) throw e;
+      return closed.has(`${repo}#${issue}`);
+    },
   } satisfies IssueApi & { fail: unknown; lose: boolean };
-  return { api, issues, edits };
+  // The owner closes the issue on GitHub.
+  const close = (repo: string, issue: number) => void closed.add(`${repo}#${issue}`);
+  return { api, issues, edits, close };
 }
 
 const REPOS = ["example-owner/example-apps", "example-owner/example-platform", "example-owner/example-hosts"];
@@ -382,6 +390,91 @@ test("an edit of a deleted issue opens a new issue", async () => {
   expect(issues[1]!.body).toContain("second answer");
 });
 
+test("an issue the owner closed ends its session, and the group's next alert opens a new issue that names the closed one", async () => {
+  const { store, queue, issues, edits, close } = setup();
+  await turn(store, "first alert", model("first answer", name("example-hosts")), recordTool);
+  await queue.flush();
+  close("example-owner/example-hosts", 1);
+  await queue.watch();
+
+  await turn(store, "second alert", model("second answer"), recordTool);
+  await queue.flush();
+
+  expect(edits).toHaveLength(0);
+  expect(issues.map((i) => [i.repo, i.number])).toEqual([
+    ["example-owner/example-hosts", 1],
+    ["example-owner/example-apps", 2],
+  ]);
+  expect(issues[0]!.body).toContain("first answer");
+  expect(issues[1]!.body).toContain("example-owner/example-hosts#1");
+  expect(sections(issues[1]!.body)).toMatchObject({ Cause: "second answer" });
+});
+
+test("an issue still open keeps its session, and the next alert edits it", async () => {
+  const { store, queue, issues, edits } = setup();
+  await turn(store, "first alert", model("first answer"));
+  await queue.flush();
+  await queue.watch();
+  await turn(store, "second alert", model("second answer"));
+  await queue.flush();
+
+  expect(issues).toHaveLength(1);
+  expect(edits).toHaveLength(1);
+});
+
+test("a closed issue's session stays open while it has a turn or a write pending", async () => {
+  const { store, queue, issues, close } = setup();
+  await turn(store, "first alert", model("first answer"));
+  await queue.flush();
+  close("example-owner/example-apps", 1);
+  const { sessionId, turnId } = store.noteFiring(key, [String(fingerprint++)], "second alert");
+  await queue.watch();
+  expect(store.isClosed(sessionId)).toBe(false);
+  await runTurn(deps(store, model("second answer")), { id: turnId!, sessionId, text: "second alert" });
+  await queue.watch();
+  expect(store.isClosed(sessionId)).toBe(false);
+  await queue.flush();
+  await queue.watch();
+  expect(store.isClosed(sessionId)).toBe(true);
+
+  expect(issues).toHaveLength(1);
+  expect(issues[0]!.body).toContain("second answer");
+});
+
+test("a failed state check leaves the session open, and the next check closes it", async () => {
+  const { store, queue, api, issues, close } = setup();
+  await turn(store, "first alert", model("first answer"));
+  await queue.flush();
+  close("example-owner/example-apps", 1);
+  api.fail = (call) => (call === "isClosed" ? new Error("503 Service Unavailable") : null);
+  await queue.watch();
+  await turn(store, "second alert", model("second answer"));
+  await queue.flush();
+  expect(issues).toHaveLength(1);
+
+  api.fail = null;
+  await queue.watch();
+  await turn(store, "third alert", model("third answer"));
+  await queue.flush();
+  expect(issues).toHaveLength(2);
+});
+
+test("a deleted issue is no longer checked, and the next write opens a new one", async () => {
+  const { store, queue, api, issues } = setup();
+  await turn(store, "first alert", model("first answer"));
+  await queue.flush();
+  let checks = 0;
+  api.fail = (call) => (call === "isClosed" ? (checks++, new GoneIssue("410 Gone")) : null);
+  await queue.watch();
+  await queue.watch();
+  api.fail = null;
+  await turn(store, "second alert", model("second answer"));
+  await queue.flush();
+
+  expect(checks).toBe(1);
+  expect(issues.map((i) => i.number)).toEqual([1, 2]);
+});
+
 const REPO = "example-owner/example-repo";
 
 // A GitHub API fake. respond, when set, answers an issue call first.
@@ -484,6 +577,17 @@ test("the client finds a recent issue by its marker", async () => {
   const { api } = fakeApi();
   expect(await api.find(REPO, "m-1")).toBe(8);
   expect(await api.find(REPO, "m-2")).toBeNull();
+});
+
+test("the client reads whether an issue is closed", async () => {
+  const { api, seen, state } = fakeApi();
+  state.respond = (path) => (path.endsWith("/issues/3") ? Response.json({ number: 3, state: "closed" }) : Response.json({ number: 4, state: "open" }));
+  expect(await api.isClosed(REPO, 3)).toBe(true);
+  expect(await api.isClosed(REPO, 4)).toBe(false);
+  expect(seen.filter((s) => s.path.includes("/issues/")).map((s) => [s.method, s.path, s.auth])).toEqual([
+    ["GET", "/repos/example-owner/example-repo/issues/3", "Bearer installation-1"],
+    ["GET", "/repos/example-owner/example-repo/issues/4", "Bearer installation-1"],
+  ]);
 });
 
 test("GitHub's answers map to refused, gone, or worth a retry", async () => {

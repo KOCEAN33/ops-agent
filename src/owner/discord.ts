@@ -78,7 +78,8 @@ export class Outbox {
         try {
           await this.deliver(post);
           this.d.store.postSent(post.id);
-          if (post.sessionId !== null && this.d.store.firingCount(post.sessionId) === 0) await this.archive(post.sessionId);
+          const ended = post.sessionId !== null && (this.d.store.firingCount(post.sessionId) === 0 || this.d.store.isClosed(post.sessionId));
+          if (ended) await this.archive(post.sessionId!);
         } catch (e) {
           console.error(JSON.stringify({ msg: "discord post failed", postId: post.id, error: String(e) }));
           // A lost thread is replaced by a new one. A lost channel is a
@@ -105,7 +106,8 @@ export class Outbox {
     }
   }
 
-  // A resolved group's thread drops out of the open thread list. Archiving is
+  // A resolved group's or a closed session's thread drops out of the open
+  // thread list. Archiving is
   // a courtesy, like typing, so a failed call is logged and ignored.
   private async archive(sessionId: number) {
     const threadId = this.d.store.thread(sessionId)?.threadId;
@@ -161,6 +163,10 @@ export function onMessage(d: ReplyDeps, m: { channelId: string; authorId: string
   if (m.authorId !== d.ownerId || !m.content.trim()) return;
   const sessionId = d.store.sessionForThread(m.channelId);
   if (sessionId === null) return;
+  if (d.store.isClosed(sessionId)) {
+    d.store.queuePost(sessionId, "This session ended when its issue was closed, so a reply here starts no turn. The group's next alert opens a new thread.");
+    return;
+  }
   d.store.addTurn(sessionId, `The owner replied in this alert's Discord thread:\n\n${m.content}`);
   d.kick();
 }

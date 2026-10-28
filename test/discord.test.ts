@@ -279,6 +279,52 @@ test("a failed archive is ignored, and the posts behind it go out", async () => 
   expect(archived).toEqual([]);
 });
 
+test("a closed session's thread gets a notice and is archived while its group still fires", async () => {
+  const { store, outbox, threads, archived, inThreads } = setup();
+  const sessionId = post(store, key, "firing");
+  await outbox.flush();
+  store.closeSession(sessionId);
+  await outbox.flush();
+
+  const thread = threads[0]!.messageId;
+  expect(inThreads()).toHaveLength(2);
+  expect(inThreads()[1]![0]).toBe(thread);
+  expect(inThreads()[1]![1]).toContain("closed");
+  expect(archived).toEqual([thread]);
+});
+
+test("the group's next alert after its session closed opens a new thread", async () => {
+  const { store, outbox, threads, inThreads } = setup();
+  const first = post(store, key, "first incident");
+  await outbox.flush();
+  store.closeSession(first);
+  await outbox.flush();
+  const second = post(store, key, "second incident");
+  await outbox.flush();
+
+  expect(second).not.toBe(first);
+  expect(threads).toHaveLength(2);
+  expect(inThreads().at(-1)).toEqual([threads[1]!.messageId, "second incident"]);
+});
+
+test("the owner's reply in a closed session's thread queues no turn and gets a notice", async () => {
+  const { store, outbox, threads, archived, inThreads } = setup();
+  const sessionId = post(store, key, "firing");
+  await outbox.flush();
+  store.closeSession(sessionId);
+  await outbox.flush();
+  const thread = threads[0]!.messageId;
+  let kicks = 0;
+  onMessage({ store, ownerId: OWNER, kick: () => void kicks++ }, { channelId: thread, authorId: OWNER, content: "why did it fail" });
+  await outbox.flush();
+
+  expect(store.pending()).toHaveLength(0);
+  expect(kicks).toBe(0);
+  expect(inThreads()).toHaveLength(3);
+  expect(inThreads()[2]![0]).toBe(thread);
+  expect(archived).toEqual([thread, thread]);
+});
+
 async function threadOf(store: Store) {
   const discord = fakeDiscord();
   post(store, key, "answer");

@@ -138,10 +138,13 @@ function cleanMarkdown(text: string, hosts: ReadonlySet<string>): string {
 
 const markerLine = (marker: string) => `<!-- ops-agent:${marker} -->`;
 
-export function issueBody(h: Handoff, hosts: ReadonlySet<string>, marker: string): string {
+// earlier, owner/name#number, is the closed issue of the group's session
+// before this one, which GitHub links.
+export function issueBody(h: Handoff, hosts: ReadonlySet<string>, marker: string, earlier: string | null = null): string {
   // Cleaning runs on the whole text and the cut after it: cleaning lengthens
   // text, and a token cut in half no longer matches its redaction pattern.
   return [
+    ...(earlier === null ? [] : [`Earlier issue for this alert group: ${earlier}`]),
     `### Symptom\n\n${cut(cleanMarkdown(h.symptom, hosts), MAX_SYMPTOM)}`,
     `### Cause\n\n${cut(cleanMarkdown(h.cause, hosts), MAX_CAUSE)}`,
     `### Actions\n\n${NO_ACTIONS}`,
@@ -157,6 +160,7 @@ export interface IssueApi {
   edit(repo: string, issue: number, body: string): Promise<void>;
   // The number of a recent issue whose body holds the marker.
   find(repo: string, marker: string): Promise<number | null>;
+  isClosed(repo: string, issue: number): Promise<boolean>;
 }
 
 // GitHub refused the write for good, so sending it again changes nothing.
@@ -204,6 +208,28 @@ export class IssueQueue {
     }
   }
 
+  // Ends each open session whose issue the owner closed. A failed check is
+  // logged, and the next one tries again. Each check reads every open issue,
+  // one request each: past a few hundred open issues, read each repository's
+  // recently closed issues instead.
+  async watch() {
+    if (this.busy) return;
+    this.busy = true;
+    try {
+      for (const s of this.d.store.openIssues()) {
+        try {
+          if (await this.d.api.isClosed(s.repo, s.number)) this.d.store.closeSession(s.sessionId);
+        } catch (e) {
+          console.error(JSON.stringify({ msg: "issue state check failed", sessionId: s.sessionId, error: String(e) }));
+          // As on a write, the next write opens a new issue.
+          if (e instanceof GoneIssue) this.d.store.forgetIssue(s.sessionId);
+        }
+      }
+    } finally {
+      this.busy = false;
+    }
+  }
+
   // The session's first write fixes its repository: the one the hand-off
   // names if it is listed, else the default. Later names are ignored, so the
   // issue stays where it opened.
@@ -227,7 +253,7 @@ export class IssueQueue {
   private async deliver(w: IssueWrite) {
     const issue = this.d.store.issue(w.sessionId);
     const repo = this.repo(w);
-    const body = issueBody(this.current(w), this.d.linkHosts, issue.marker);
+    const body = issueBody(this.current(w), this.d.linkHosts, issue.marker, this.d.store.earlierIssue(w.sessionId));
     if (issue.number !== null) return this.d.api.edit(repo, issue.number, body);
     // An earlier open may have run and lost its response. Its issue carries
     // the session's marker.
@@ -333,5 +359,6 @@ export function githubApi(d: GitHubDeps): IssueApi {
       const issues = (await call(repo, "GET", path, undefined, false)) as { number: number; body: string | null }[];
       return issues.find((i) => i.body?.includes(markerLine(marker)))?.number ?? null;
     },
+    isClosed: async (repo, issue) => ((await call(repo, "GET", `/issues/${issue}`, undefined, true)) as { state: string }).state === "closed",
   };
 }

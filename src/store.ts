@@ -59,11 +59,25 @@ export class Store {
     this.db.run("PRAGMA busy_timeout = 5000");
     this.db.run("PRAGMA journal_mode = WAL");
     this.db.transaction(() => {
-      this.db.run(`CREATE TABLE IF NOT EXISTS sessions (
+      // A group holds one open session at a time, and a session closes when
+      // its issue does. A file made before sessions could close holds
+      // group_key UNIQUE, which SQLite cannot drop in place, so its table is
+      // rebuilt.
+      const sessions = (name: string) => `CREATE TABLE IF NOT EXISTS ${name} (
         id INTEGER PRIMARY KEY,
-        group_key TEXT NOT NULL UNIQUE,
-        firing TEXT NOT NULL
-      )`);
+        group_key TEXT NOT NULL,
+        firing TEXT NOT NULL,
+        closed INTEGER NOT NULL DEFAULT 0
+      )`;
+      const columns = this.db.query<{ name: string }, []>("SELECT name FROM pragma_table_info('sessions')").all();
+      if (columns.length > 0 && !columns.some((c) => c.name === "closed")) {
+        this.db.run(sessions("sessions_new"));
+        this.db.run("INSERT INTO sessions_new (id, group_key, firing) SELECT id, group_key, firing FROM sessions");
+        this.db.run("DROP TABLE sessions");
+        this.db.run("ALTER TABLE sessions_new RENAME TO sessions");
+      }
+      this.db.run(sessions("sessions"));
+      this.db.run("CREATE UNIQUE INDEX IF NOT EXISTS open_session ON sessions (group_key) WHERE closed = 0");
       this.db.run(`CREATE TABLE IF NOT EXISTS messages (
         id INTEGER PRIMARY KEY,
         session_id INTEGER NOT NULL REFERENCES sessions(id),
@@ -137,10 +151,16 @@ export class Store {
     const firing = JSON.stringify([...fingerprints].sort());
     return this.db.transaction(() => {
       const row = this.db
-        .query<{ id: number; firing: string }, [string]>("SELECT id, firing FROM sessions WHERE group_key = ?")
+        .query<{ id: number; firing: string }, [string]>("SELECT id, firing FROM sessions WHERE group_key = ? AND closed = 0")
         .get(groupKey);
       let sessionId: number;
       if (!row) {
+        // Alerts still firing when the owner closed the issue are not news
+        // either, so only a change opens the group's next session.
+        const last = this.db
+          .query<{ id: number; firing: string }, [string]>("SELECT id, firing FROM sessions WHERE group_key = ? ORDER BY id DESC LIMIT 1")
+          .get(groupKey);
+        if (last?.firing === firing) return { sessionId: last.id, turnId: null };
         const { lastInsertRowid } = this.db
           .query("INSERT INTO sessions (group_key, firing) VALUES (?, ?)")
           .run(groupKey, firing);
@@ -298,6 +318,54 @@ export class Store {
   // repository.
   forgetIssue(sessionId: number) {
     this.db.query("UPDATE issues SET number = NULL WHERE session_id = ?").run(sessionId);
+  }
+
+  // Every open session's issue that GitHub numbered.
+  openIssues(): { sessionId: number; repo: string; number: number }[] {
+    return this.db
+      .query<{ sessionId: number; repo: string; number: number }, []>(
+        `SELECT s.id AS sessionId, i.repo, i.number FROM sessions s JOIN issues i ON i.session_id = s.id
+         WHERE s.closed = 0 AND i.number IS NOT NULL AND i.repo IS NOT NULL`,
+      )
+      .all();
+  }
+
+  // The issue of the group's latest session before this one, as owner/name#number.
+  earlierIssue(sessionId: number): string | null {
+    const row = this.db
+      .query<{ repo: string; number: number }, [number, number]>(
+        `SELECT i.repo, i.number FROM sessions s JOIN issues i ON i.session_id = s.id
+         WHERE s.group_key = (SELECT group_key FROM sessions WHERE id = ?) AND s.id < ? AND i.number IS NOT NULL
+         ORDER BY s.id DESC LIMIT 1`,
+      )
+      .get(sessionId, sessionId);
+    return row && `${row.repo}#${row.number}`;
+  }
+
+  // Ends the session once it has no turn or hand-off pending, so the last
+  // hand-off reaches the issue first, and tells the thread. Returns whether it
+  // closed.
+  closeSession(sessionId: number): boolean {
+    return this.db.transaction(() => {
+      const { changes } = this.db
+        .query(
+          `UPDATE sessions SET closed = 1 WHERE id = ? AND closed = 0
+           AND NOT EXISTS (SELECT 1 FROM turns WHERE session_id = sessions.id AND ended IS NULL)
+           AND NOT EXISTS (SELECT 1 FROM issue_writes WHERE session_id = sessions.id AND state IS NULL)`,
+        )
+        .run(sessionId);
+      if (changes === 0) return false;
+      this.queuePost(sessionId, "This alert group's issue was closed, so this session has ended. The group's next alert opens a new thread and issue.");
+      return true;
+    })();
+  }
+
+  isClosed(sessionId: number): boolean {
+    return this.db.query<{ c: number }, [number]>("SELECT closed AS c FROM sessions WHERE id = ?").get(sessionId)?.c === 1;
+  }
+
+  queuePost(sessionId: number, text: string) {
+    this.db.query("INSERT INTO posts (session_id, text) VALUES (?, ?)").run(sessionId, text);
   }
 
   // The session's alert group, which names its thread.

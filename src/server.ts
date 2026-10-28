@@ -80,6 +80,9 @@ const INSTRUCTIONS_MISSING =
 // GitHub allows 5,000 requests an hour to an installation, and a failing write
 // is retried on each poll.
 const ISSUE_POLL_MS = 10_000;
+// An issue the owner closed ends its session within this long. Each check
+// reads every open session's issue.
+const ISSUE_WATCH_MS = 5 * 60_000;
 
 const SERVICE_ACCOUNT = "/var/run/secrets/kubernetes.io/serviceaccount";
 
@@ -177,6 +180,7 @@ if (import.meta.main) {
     const api = githubApi({ apiUrl: "https://api.github.com", ...g, now });
     const issues = new IssueQueue({ store, api, linkHosts: config.linkHosts, repos: config.gitopsRepos });
     setInterval(() => void issues.flush(), ISSUE_POLL_MS);
+    setInterval(() => void issues.watch(), ISSUE_WATCH_MS);
   } else {
     console.log(JSON.stringify({ msg: "issues off: hand-offs wait in the store" }));
   }
