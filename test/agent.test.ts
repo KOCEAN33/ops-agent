@@ -268,7 +268,7 @@ test("a turn ended by its spend cap still tells the owner", async () => {
   const d = deps(m, { price: pricey, turnCapUsd: worstOutput / 2 });
   const turn = notify(d.store, { alertname: "A", namespace: null }, "alert");
   await runTurn(d, turn);
-  expect(d.store.nextPost()?.text).toContain("spend");
+  expect(d.store.nextPost()?.text).toContain("비용");
 });
 
 test("instructions are every markdown file but the README and the other alerts' runbooks", async () => {

@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import type { ModelMessage } from "ai";
 import type { GroupKey } from "./alert";
 import type { Handoff } from "./owner/issues";
+import { notices } from "./owner/notices";
 
 export interface Turn {
   id: number;
@@ -202,7 +203,7 @@ export class Store {
         this.db.query("UPDATE turns SET ended = 'attempts' WHERE id = ?").run(turnId);
         this.db
           .query("INSERT INTO posts (session_id, text) SELECT session_id, ? FROM turns WHERE id = ?")
-          .run(`This alert's turn failed ${maxAttempts} times and was dropped. The agent's log holds the errors.`, turnId);
+          .run(notices.turnDropped(maxAttempts), turnId);
         return null;
       }
       // After the last attempt fails, the next claim only ends the turn, so it
@@ -355,7 +356,7 @@ export class Store {
         )
         .run(sessionId);
       if (changes === 0) return false;
-      this.queuePost(sessionId, "이슈가 닫혀 이 세션을 종료합니다. 같은 알림 그룹의 다음 알림은 새 스레드와 새 이슈로 시작합니다.");
+      this.queuePost(sessionId, notices.sessionClosed);
       return true;
     })();
   }

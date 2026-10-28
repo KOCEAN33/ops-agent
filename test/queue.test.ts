@@ -197,7 +197,7 @@ test("a turn ended at the attempt limit tells its thread once", async () => {
 
   await until(() => store.pending().length === 0);
   const post = store.nextPost()!;
-  expect(post.text).toContain("failed 3 times");
+  expect(post.text).toContain("3번 실패");
   store.postSent(post.id);
   expect(store.nextPost()).toBeNull();
 });

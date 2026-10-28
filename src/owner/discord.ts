@@ -3,6 +3,7 @@ import { DiscordAPIError, REST } from "@discordjs/rest";
 import { WebSocketManager, WebSocketShardEvents } from "@discordjs/ws";
 import { clean } from "./links";
 import type { Post, Store } from "../store";
+import { notices } from "./notices";
 
 export interface Message {
   content: string;
@@ -164,7 +165,7 @@ export function onMessage(d: ReplyDeps, m: { channelId: string; authorId: string
   const sessionId = d.store.sessionForThread(m.channelId);
   if (sessionId === null) return;
   if (d.store.isClosed(sessionId)) {
-    d.store.queuePost(sessionId, "이슈가 닫혀 종료된 세션이라 이 답글에는 응답하지 않습니다. 같은 알림 그룹의 다음 알림은 새 스레드로 시작합니다.");
+    d.store.queuePost(sessionId, notices.replyToClosed);
     return;
   }
   d.store.addTurn(sessionId, `The owner replied in this alert's Discord thread:\n\n${m.content}`);

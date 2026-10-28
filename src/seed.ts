@@ -1,4 +1,5 @@
 import type { Store } from "./store";
+import { notices } from "./owner/notices";
 
 // A new SQLite file that no restore filled would restart the month's spend at
 // zero. The agent's spend counters outlive the file in the metrics store, so a
@@ -11,9 +12,6 @@ const REFUNDED = "ops_agent_spend_refunded_usd_total";
 // Reaches back past the month's start for each series' value there.
 const LOOKBACK_S = 300;
 const TIMEOUT_MS = 20_000;
-
-const SEED_FAILED =
-  "The SQLite file was new and the month's model spend could not be read from the metrics store, so the monthly cap counts from zero this month.";
 
 export interface SeedDeps {
   // The PromQL endpoint, without a trailing slash.
@@ -94,7 +92,7 @@ export async function seedSpend(d: SeedDeps & { store: Store }): Promise<void> {
     usd = await spendFromMetrics(d);
   } catch (e) {
     console.error(JSON.stringify({ msg: "spend seed failed", month, error: String(e) }));
-    d.store.seedFailed(`spend-seed-failed ${month}`, SEED_FAILED);
+    d.store.seedFailed(`spend-seed-failed ${month}`, notices.seedFailed);
     return;
   }
   d.store.seeded(month, usd);

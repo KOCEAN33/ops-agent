@@ -15,6 +15,7 @@ import type { Metrics, TurnEnd } from "../metrics";
 import { handoff } from "../owner/issues";
 import type { Store, Turn } from "../store";
 import { turnTools, type ReadTool } from "../tools/contract";
+import { notices } from "../owner/notices";
 
 const BASE_INSTRUCTIONS = `You are ops-agent, the first responder for a homelab Kubernetes cluster. You investigate an alert with the tools you are given, contain the incident with a reversible stopgap when a service threatens the cluster, and hand the root cause off to the owner as an issue. You do not fix root causes yourself.
 
@@ -81,8 +82,8 @@ function providerUsage(u: {
 const INPUT_ALLOWANCE_TOKENS = 4_000;
 
 // A turn cut off before its answer still tells the owner it ran.
-const STOPPED = "Stopped before answering: this turn reached its spend or step limit.";
-const NO_ANSWER = "Ended without an answer: the model returned no text, even when asked once more.";
+const STOPPED = notices.turnStopped;
+const NO_ANSWER = notices.noAnswer;
 
 const ANSWER_NOW: ModelMessage = {
   role: "user",

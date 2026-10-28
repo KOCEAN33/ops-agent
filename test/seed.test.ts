@@ -85,7 +85,7 @@ test("a failed query seeds zero and tells the owner once", async () => {
   await seedSpend({ store, url, job: JOB, now });
   expect(store.monthSpend("2026-10")).toBe(0);
   const post = store.nextPost();
-  expect(post?.text).toContain("spend");
+  expect(post?.text).toContain("비용");
   store.postSent(post!.id);
   expect(store.nextPost()).toBeNull();
 });
@@ -123,7 +123,7 @@ test("a partial answer, as when a store behind Thanos is down, fails the seed", 
   await seedSpend({ store, url, job: JOB, now });
   warnings = undefined;
   expect(store.monthSpend("2026-10")).toBe(0);
-  expect(store.nextPost()?.text).toContain("spend");
+  expect(store.nextPost()?.text).toContain("비용");
 });
 
 test("a new file waits for its seed across restarts until a seed or a failed read ends the wait", async () => {
