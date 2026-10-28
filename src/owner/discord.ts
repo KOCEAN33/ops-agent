@@ -164,7 +164,7 @@ export function onMessage(d: ReplyDeps, m: { channelId: string; authorId: string
   const sessionId = d.store.sessionForThread(m.channelId);
   if (sessionId === null) return;
   if (d.store.isClosed(sessionId)) {
-    d.store.queuePost(sessionId, "This session ended when its issue was closed, so a reply here starts no turn. The group's next alert opens a new thread.");
+    d.store.queuePost(sessionId, "이슈가 닫혀 종료된 세션이라 이 답글에는 응답하지 않습니다. 같은 알림 그룹의 다음 알림은 새 스레드로 시작합니다.");
     return;
   }
   d.store.addTurn(sessionId, `The owner replied in this alert's Discord thread:\n\n${m.content}`);

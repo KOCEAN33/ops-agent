@@ -289,7 +289,7 @@ test("a closed session's thread gets a notice and is archived while its group st
   const thread = threads[0]!.messageId;
   expect(inThreads()).toHaveLength(2);
   expect(inThreads()[1]![0]).toBe(thread);
-  expect(inThreads()[1]![1]).toContain("closed");
+  expect(inThreads()[1]![1]).toContain("이슈가 닫혀");
   expect(archived).toEqual([thread]);
 });
 

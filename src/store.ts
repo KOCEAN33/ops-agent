@@ -355,7 +355,7 @@ export class Store {
         )
         .run(sessionId);
       if (changes === 0) return false;
-      this.queuePost(sessionId, "This alert group's issue was closed, so this session has ended. The group's next alert opens a new thread and issue.");
+      this.queuePost(sessionId, "이슈가 닫혀 이 세션을 종료합니다. 같은 알림 그룹의 다음 알림은 새 스레드와 새 이슈로 시작합니다.");
       return true;
     })();
   }
