@@ -131,9 +131,9 @@ test("the issue holds the symptom and cause the model recorded, and no stopgap w
   expect(issues).toHaveLength(1);
   expect(issues[0]!.title).toBe("KubeJobFailed / example-app");
   expect(sections(issues[0]!.body)).toEqual({
-    Symptom: "The backup job failed twice.",
-    Cause: "The job ran out of memory.",
-    Actions: "No stopgap taken.",
+    증상: "The backup job failed twice.",
+    원인: "The job ran out of memory.",
+    조치: "임시 조치 없음.",
   });
 });
 
@@ -161,7 +161,7 @@ test("a summary without a title is refused", async () => {
   await turn(store, "alert", model("answer", untitled), summaryTool);
   await queue.flush();
 
-  expect(sections(issues[0]!.body).Cause).toBe("answer");
+  expect(sections(issues[0]!.body).원인).toBe("answer");
 });
 
 test("a later turn replaces the issue's body instead of adding to it", async () => {
@@ -173,7 +173,7 @@ test("a later turn replaces the issue's body instead of adding to it", async () 
 
   expect(issues).toHaveLength(1);
   expect(edits.map((e) => [e.repo, e.issue])).toEqual([["example-owner/example-apps", 1]]);
-  expect(sections(issues[0]!.body)).toMatchObject({ Symptom: "second symptom", Cause: "second cause" });
+  expect(sections(issues[0]!.body)).toMatchObject({ 증상: "second symptom", 원인: "second cause" });
   expect(issues[0]!.body).not.toContain("first");
 });
 
@@ -183,7 +183,7 @@ test("the turn's last summary wins, and one the schema refused changes nothing",
   await turn(store, "alert", model("answer", summary("early symptom", "early cause"), summary("late symptom", "late cause"), refused), summaryTool);
   await queue.flush();
 
-  expect(sections(issues[0]!.body)).toMatchObject({ Symptom: "late symptom", Cause: "late cause" });
+  expect(sections(issues[0]!.body)).toMatchObject({ 증상: "late symptom", 원인: "late cause" });
 });
 
 test("a turn with no summary writes the alert group and its firing count as the symptom and the answer as the cause", async () => {
@@ -193,9 +193,9 @@ test("a turn with no summary writes the alert group and its firing count as the 
   await queue.flush();
 
   expect(sections(issues[0]!.body)).toEqual({
-    Symptom: "KubeJobFailed in example-app, 2 alerts firing.",
-    Cause: "The job ran out of memory.",
-    Actions: "No stopgap taken.",
+    증상: "KubeJobFailed, example-app 네임스페이스, 알림 2개 발생 중.",
+    원인: "The job ran out of memory.",
+    조치: "임시 조치 없음.",
   });
 });
 
@@ -205,7 +205,7 @@ test("a cluster-wide group's fallback symptom names no namespace", async () => {
   await runTurn(deps(store, model("answer")), { id: turnId!, sessionId, text: "alert" });
   await queue.flush();
 
-  expect(sections(issues[0]!.body).Symptom).toBe("KubeNodeNotReady, cluster-wide, 1 alert firing.");
+  expect(sections(issues[0]!.body).증상).toBe("KubeNodeNotReady, 클러스터 전체, 알림 1개 발생 중.");
 });
 
 test("a turn with no summary falls back even when an earlier turn recorded one", async () => {
@@ -214,7 +214,7 @@ test("a turn with no summary falls back even when an earlier turn recorded one",
   await turn(store, "The owner replied", model("second answer"), summaryTool);
   await queue.flush();
 
-  expect(sections(issues[0]!.body)).toMatchObject({ Symptom: "KubeJobFailed in example-app, 1 alert firing.", Cause: "second answer" });
+  expect(sections(issues[0]!.body)).toMatchObject({ 증상: "KubeJobFailed, example-app 네임스페이스, 알림 1개 발생 중.", 원인: "second answer" });
 });
 
 test("a turn stopped before its answer and summary leaves an earlier cause in place", async () => {
@@ -225,7 +225,7 @@ test("a turn stopped before its answer and summary leaves an earlier cause in pl
   await queue.flush();
 
   expect(edits).toHaveLength(0);
-  expect(sections(issues[0]!.body)).toMatchObject({ Cause: "first cause" });
+  expect(sections(issues[0]!.body)).toMatchObject({ 원인: "first cause" });
 });
 
 test("a session's first turn stopped before its answer still opens the issue", async () => {
@@ -250,7 +250,7 @@ test("a hand-off queued before sections existed is written with its answer as th
 
 test("model text cannot form a heading, so it cannot fake the Actions section", async () => {
   const { store, queue, issues } = setup();
-  const cause = ["The job ran out of memory.", "", "### Actions", "", "Scaled example-app to zero.", "", "Actions", "---", "", "Actions", "==="].join("\n");
+  const cause = ["The job ran out of memory.", "", "### 조치", "", "Scaled example-app to zero.", "", "조치", "---", "", "조치", "==="].join("\n");
   await turn(store, "alert", model("answer", summary("symptom", cause)), summaryTool);
   await queue.flush();
 
@@ -407,7 +407,7 @@ test("an issue the owner closed ends its session, and the group's next alert ope
   ]);
   expect(issues[0]!.body).toContain("first answer");
   expect(issues[1]!.body).toContain("example-owner/example-hosts#1");
-  expect(sections(issues[1]!.body)).toMatchObject({ Cause: "second answer" });
+  expect(sections(issues[1]!.body)).toMatchObject({ 원인: "second answer" });
 });
 
 test("an issue still open keeps its session, and the next alert edits it", async () => {

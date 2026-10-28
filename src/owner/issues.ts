@@ -2,6 +2,7 @@ import type { ModelMessage } from "ai";
 import { createPrivateKey, sign, type KeyObject } from "node:crypto";
 import { z } from "zod";
 import { clean } from "./links";
+import { issueText } from "./notices";
 import type { GroupKey } from "../alert";
 import type { IssueWrite, Store } from "../store";
 import { readTool, unwrap, type ReadTool } from "../tools/contract";
@@ -79,8 +80,7 @@ function lastRecorded(messages: ModelMessage[], toolName: string): unknown {
 }
 
 export function fallbackSymptom(group: GroupKey, firing: number): string {
-  const where = group.namespace === null ? ", cluster-wide" : ` in ${group.namespace}`;
-  return `${group.alertname}${where}, ${firing} ${firing === 1 ? "alert" : "alerts"} firing.`;
+  return issueText.fallbackSymptom(group.alertname, group.namespace, firing);
 }
 
 // A turn with no recorded summary still hands off, from facts code holds. With
@@ -102,9 +102,8 @@ const MAX_SYMPTOM = 15_000;
 const MAX_CAUSE = 40_000;
 const MAX_TITLE = 200;
 
-// The stopgap tools do not exist yet. Once they do, this section comes from
-// the Write record, so the model never claims an action that did not run.
-const NO_ACTIONS = "No stopgap taken.";
+// The stopgap tools do not exist yet. Once they do, the actions section comes
+// from the Write record, so the model never claims an action that did not run.
 
 const cut = (s: string, max: number) => (s.length > max ? `${s.slice(0, max)}\n[cut ${s.length - max} more characters]` : s);
 
@@ -124,7 +123,7 @@ function stripBare(text: string, hosts: ReadonlySet<string>): string {
 // so links off the allowlist go, and markdown or HTML that could form a link or
 // image from what is left is broken with character references: `](` opens an
 // inline link or image, `]:` a link definition, and `<` a tag or autolink.
-// Headings are broken too, so model text cannot fake the Actions section that
+// Headings are broken too, so model text cannot fake the actions section that
 // code writes: `#` opens one, and a line of `=` or `-` underlines the line above.
 // References need no backslash, so a backslash in the text cannot undo them.
 function cleanMarkdown(text: string, hosts: ReadonlySet<string>): string {
@@ -144,10 +143,10 @@ export function issueBody(h: Handoff, hosts: ReadonlySet<string>, marker: string
   // Cleaning runs on the whole text and the cut after it: cleaning lengthens
   // text, and a token cut in half no longer matches its redaction pattern.
   return [
-    ...(earlier === null ? [] : [`Earlier issue for this alert group: ${earlier}`]),
-    `### Symptom\n\n${cut(cleanMarkdown(h.symptom, hosts), MAX_SYMPTOM)}`,
-    `### Cause\n\n${cut(cleanMarkdown(h.cause, hosts), MAX_CAUSE)}`,
-    `### Actions\n\n${NO_ACTIONS}`,
+    ...(earlier === null ? [] : [issueText.earlier(earlier)]),
+    `### ${issueText.symptom}\n\n${cut(cleanMarkdown(h.symptom, hosts), MAX_SYMPTOM)}`,
+    `### ${issueText.cause}\n\n${cut(cleanMarkdown(h.cause, hosts), MAX_CAUSE)}`,
+    `### ${issueText.actions}\n\n${issueText.noActions}`,
     markerLine(marker),
   ].join("\n\n");
 }
