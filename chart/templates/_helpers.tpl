@@ -40,6 +40,10 @@ helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version }}
     - --git-config=safe.directory:/git
     - --link=current
     - --period={{ .root.Values.gitSync.period }}
+    # The default, 0, exits on the first failed fetch. Cilium's DNS proxy
+    # fails a lookup now and then (cilium#33912), which restarted the
+    # sidecar. A failure that lasts three periods still restarts it.
+    - --max-failures=3
     - --github-app-application-id={{ required "github.appId is required for a git-sync sidecar" .root.Values.github.appId }}
     - --github-app-installation-id={{ required "github.installationId is required for a git-sync sidecar" .root.Values.github.installationId }}
     - --github-app-private-key-file=/etc/github-app/key.pem
