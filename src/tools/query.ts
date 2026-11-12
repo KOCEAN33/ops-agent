@@ -35,8 +35,8 @@ const MAX_SERIES = 50;
 const MAX_POINTS = 250;
 const MAX_LINE = 500;
 
-async function get(base: string, path: string, params: Record<string, string>, signal: AbortSignal, what: string) {
-  const res = await fetch(`${base}${path}?${new URLSearchParams(params)}`, { signal });
+async function get(base: string, path: string, params: Record<string, string>, signal: AbortSignal, what: string, headers?: Record<string, string>) {
+  const res = await fetch(`${base}${path}?${new URLSearchParams(params)}`, { signal, headers });
   const body = await res.text();
   if (res.ok) return JSON.parse(body).data;
   // Prometheus answers in JSON, Loki in plain text.
@@ -51,7 +51,7 @@ async function get(base: string, path: string, params: Record<string, string>, s
   throw new ToolError(`${what} answered ${res.status}: ${message}`, "Try a narrower query, or answer with what you have.");
 }
 
-type Sample = [number | string, string];
+type Sample = [number | string, string, { structuredMetadata?: Record<string, string> }?];
 interface Series {
   metric?: Record<string, string>;
   stream?: Record<string, string>;
@@ -69,7 +69,13 @@ function series(data: { resultType: string; result: unknown }) {
   const all = data.result as Series[];
   const result = all.slice(0, MAX_SERIES).map((s) => {
     if (data.resultType === "streams") {
-      return { labels: s.stream, lines: s.values!.map(([ns, line]) => [nsToIso(String(ns)), line.slice(0, MAX_LINE)]) };
+      return {
+        labels: s.stream,
+        lines: s.values!.map(([ns, line, meta]) => {
+          const out = [nsToIso(String(ns)), line.slice(0, MAX_LINE)];
+          return meta?.structuredMetadata ? [...out, meta.structuredMetadata] : out;
+        }),
+      };
     }
     return s.value ? { labels: s.metric, value: s.value[1] } : { labels: s.metric, values: s.values };
   });
@@ -119,7 +125,7 @@ const ns = (s: number) => String(BigInt(Math.round(s * 1000)) * 1_000_000n);
 export function lokiTools(d: QueryDeps): Record<string, ReadTool> {
   return {
     logql: readTool({
-      description: `Run a LogQL query against Loki. A log query returns the newest lines first, each cut to ${MAX_LINE} characters. A metric query returns series.`,
+      description: `Run a LogQL query against Loki. A log query returns the newest lines first, each cut to ${MAX_LINE} characters, under the streams' indexed labels. Fields a parser stage extracts stay in the line, not in labels. A metric query returns series.`,
       input: z.object({
         query: z.string().max(2_000),
         start: time.optional().describe("Defaults to 1h."),
@@ -129,7 +135,11 @@ export function lokiTools(d: QueryDeps): Record<string, ReadTool> {
       run: async ({ query, start, end, limit = 50 }, signal) => {
         const r = range(start, end, d.now());
         const params = { query, start: ns(r.start), end: ns(r.end), limit: String(limit), direction: "backward" };
-        const data = await get(d.url, "/loki/api/v1/query_range", params, signal, "Loki");
+        // Without this flag a parser stage such as `| logfmt` turns every field
+        // into a stream label, so each line comes back as its own stream with
+        // its fields repeated. With it the streams keep their indexed labels,
+        // and the parsed fields, which the line already holds, are dropped.
+        const data = await get(d.url, "/loki/api/v1/query_range", params, signal, "Loki", { "X-Loki-Response-Encoding-Flags": "categorize-labels" });
         const out = series(data);
         const lines = data.resultType === "streams" ? (data.result as Series[]).reduce((n, s) => n + s.values!.length, 0) : 0;
         return {

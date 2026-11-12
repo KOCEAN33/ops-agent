@@ -52,6 +52,10 @@ const MAX_ROWS = 100;
 const MAX_LOG_LINES = 500;
 const MAX_LOG_CHARS = 20_000;
 
+// Controllers such as CloudNativePG keep a copy of the spec in an annotation,
+// which repeats what the object already shows.
+const MAX_ANNOTATION_CHARS = 500;
+
 async function request(c: KubeConn, path: string, signal: AbortSignal, accept = "application/json") {
   return (await send(c, path, signal, accept)).json();
 }
@@ -101,7 +105,7 @@ interface Table {
 export function kubeTools(c: KubeConn): Record<string, ReadTool> {
   return {
     kube_get: readTool({
-      description: "Read one Kubernetes object in full. Env values come back redacted.",
+      description: "Read one Kubernetes object in full. Env values come back redacted, and an annotation over 500 characters as its length.",
       input: z.object({
         kind,
         namespace: namespace.optional().describe("Required for namespaced kinds."),
@@ -116,7 +120,9 @@ export function kubeTools(c: KubeConn): Record<string, ReadTool> {
         delete meta.managedFields;
         if (meta.annotations) {
           const { "kubectl.kubernetes.io/last-applied-configuration": _, ...rest } = meta.annotations as Record<string, string>;
-          meta.annotations = rest;
+          meta.annotations = Object.fromEntries(
+            Object.entries(rest).map(([k, v]) => [k, v.length > MAX_ANNOTATION_CHARS ? `[${v.length} characters left out]` : v]),
+          );
         }
         return redactEnv({ ...obj, metadata: meta });
       },

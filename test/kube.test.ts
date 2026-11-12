@@ -62,6 +62,14 @@ test("kube_get reads one object with its bearer token, without managed fields, l
   expect(out.status).toEqual({ phase: "Running" });
 });
 
+test("kube_get says how long an annotation over 500 characters is instead of returning it", async () => {
+  const long = JSON.stringify({ containers: [{ name: "web", image: "example.com/web:1" }] }).padEnd(5_000, " ");
+  respond = () => Response.json({ ...pod, metadata: { ...pod.metadata, annotations: { "example.com/spec": long, "example.com/owner": "team" } } });
+  const out = (await tools.kube_get!.run({ kind: "pods", namespace: "example-app", name: "web-0" }, signal)) as { metadata: { annotations: Record<string, string> } };
+
+  expect(out.metadata.annotations).toEqual({ "example.com/spec": "[5000 characters left out]", "example.com/owner": "team" });
+});
+
 test("kube_get on a cluster-scoped kind ignores the namespace", async () => {
   respond = () => Response.json({ kind: "Node", metadata: { name: "node-1" } });
   await tools.kube_get!.run({ kind: "nodes", namespace: "example-app", name: "node-1" }, signal);

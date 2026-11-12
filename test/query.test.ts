@@ -3,12 +3,12 @@ import { lokiTools, promTools } from "../src/tools/query";
 import { ToolError } from "../src/tools/contract";
 
 const seen: URL[] = [];
-let respond: () => Response = () => new Response(null, { status: 500 });
+let respond: (req: Request) => Response = () => new Response(null, { status: 500 });
 const server = Bun.serve({
   port: 0,
   fetch(req) {
     seen.push(new URL(req.url));
-    return respond();
+    return respond(req);
   },
 });
 afterAll(() => server.stop());
@@ -100,6 +100,53 @@ test("logql reads the newest lines first over the last hour and cuts a long line
   expect(stream!.lines[0]![0]).toBe("2026-10-26T02:59:50.000Z");
   expect(stream!.lines[0]![1].length).toBeLessThan(1_000);
   expect(stream!.lines[1]).toEqual(["2026-10-26T02:59:40.000Z", "boot"]);
+});
+
+test("logql returns a parsed query's lines as one stream, keeping structured metadata and leaving out parsed labels", async () => {
+  const ns = (s: number) => String(BigInt(s) * 1_000_000_000n);
+  const a = "reason=Killing msg=\"Stopping container web\"";
+  const b = "reason=Started msg=\"Started container web\"";
+  // Loki splits a parsed query into one stream per label set unless asked to
+  // put the parsed labels beside each line.
+  respond = (req) =>
+    req.headers.get("X-Loki-Response-Encoding-Flags") === "categorize-labels"
+      ? Response.json({
+          status: "success",
+          data: {
+            resultType: "streams",
+            encodingFlags: ["categorize-labels"],
+            result: [
+              {
+                stream: { namespace: "example-app" },
+                values: [
+                  [ns(nowS - 10), a, { structuredMetadata: { detected_level: "warn" }, parsed: { reason: "Killing", msg: "Stopping container web" } }],
+                  [ns(nowS - 20), b, { parsed: { reason: "Started", msg: "Started container web" } }],
+                ],
+              },
+            ],
+          },
+        })
+      : Response.json({
+          status: "success",
+          data: {
+            resultType: "streams",
+            result: [
+              { stream: { namespace: "example-app", reason: "Killing", msg: "Stopping container web" }, values: [[ns(nowS - 10), a]] },
+              { stream: { namespace: "example-app", reason: "Started", msg: "Started container web" }, values: [[ns(nowS - 20), b]] },
+            ],
+          },
+        });
+  const out = (await loki.logql!.run({ query: '{namespace="example-app"} | logfmt' }, signal)) as Record<string, unknown>;
+
+  expect(out.result).toEqual([
+    {
+      labels: { namespace: "example-app" },
+      lines: [
+        ["2026-10-26T02:59:50.000Z", a, { detected_level: "warn" }],
+        ["2026-10-26T02:59:40.000Z", b],
+      ],
+    },
+  ]);
 });
 
 test("a LogQL query Loki rejects fails with Loki's message", async () => {
